@@ -1,3 +1,4 @@
 Flask
 Pylette
 Pillow
+gunicorn
