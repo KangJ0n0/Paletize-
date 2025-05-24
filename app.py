@@ -167,12 +167,12 @@ HTML_TEMPLATE = """
 
 def generate_palette_image(colors, width=400, height=100):
     """
-    Generates a PIL Image representing the color palette.
+    Membuat gambar palet warna dari list warna.
     """
     img = Image.new('RGB', (width, height))
     draw = ImageDraw.Draw(img)
     num_colors = len(colors)
-    if num_colors == 0: # Handle case with no colors to avoid division by zero
+    if num_colors == 0: # Jika tidak ada warna, langsung kembalikan gambar kosong
         return img
     swatch_width = width // num_colors
     for i, color in enumerate(colors):
@@ -185,69 +185,65 @@ def generate_palette_image(colors, width=400, height=100):
 
 def image_to_base64(img: Image.Image) -> str:
     """
-    Converts a PIL Image object to a base64 encoded string for embedding in HTML.
+    Mengubah gambar PIL menjadi string base64 untuk ditampilkan di HTML.
     """
     buffer = io.BytesIO()
-    img.save(buffer, format="PNG") # Save as PNG for transparency and general web use
+    img.save(buffer, format="PNG") # Simpan sebagai PNG
     base64_img = base64.b64encode(buffer.getvalue()).decode("utf-8")
     return base64_img
 
 @app.route('/', methods=['GET'])
 def index():
     """
-    Renders the main page with the image upload form.
+    Menampilkan halaman utama dengan form upload gambar.
     """
     return render_template_string(HTML_TEMPLATE)
 
 @app.route('/upload', methods=['POST'])
 def upload():
     """
-    Handles image upload, extracts colors, generates palette image,
-    and displays results.
+    Proses upload gambar, ekstrak warna, buat gambar palet,
+    dan tampilkan hasilnya.
     """
-    uploaded_base64 = None # Initialize to None
+    uploaded_base64 = None # Inisialisasi variabel
 
     if 'image' not in request.files:
-        # Handle case where no file is uploaded
-        return render_template_string(HTML_TEMPLATE, error="No image file provided.")
+        # Jika tidak ada file yang diupload
+        return render_template_string(HTML_TEMPLATE, error="Tidak ada file gambar yang diupload.")
 
     image_file = request.files['image']
     if image_file.filename == '':
-        # Handle case where an empty file is selected
-        return render_template_string(HTML_TEMPLATE, error="No selected file.")
+        # Jika file kosong
+        return render_template_string(HTML_TEMPLATE, error="Tidak ada file yang dipilih.")
 
     try:
-        # Open the image using PIL
+        # Buka gambar dengan PIL
         img = Image.open(image_file.stream).convert("RGB")
 
-        # Convert the uploaded image to base64 for display
+        # Ubah gambar yang diupload ke base64 untuk ditampilkan
         uploaded_base64 = image_to_base64(img)
 
-        # --- Temporary File Handling for Pylette ---
-        # Create a temporary file to save the image, as Pylette seems to prefer file paths.
-        # tempfile.NamedTemporaryFile creates a unique temporary file.
-        # 'delete=False' means we'll manually delete it in the finally block.
+        # --- Simpan gambar ke file sementara untuk Pylette ---
+        # Pylette butuh path file, jadi simpan dulu ke file sementara
         with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as temp_image_file:
-            # Save the PIL Image to the temporary file
             img.save(temp_image_file.name, format='PNG')
-            temp_file_path = temp_image_file.name # Get the path to the temporary file
+            temp_file_path = temp_image_file.name
 
-        colors = [] # Initialize colors list
+        colors = [] # Inisialisasi list warna
         try:
-            # Pass the path to the temporary file to extract_colors
+            # Ekstrak warna dari file sementara
             colors = extract_colors(temp_file_path, palette_size=4)
         finally:
-            # Ensure the temporary file is deleted, even if extract_colors fails
+            # Hapus file sementara setelah selesai
             if os.path.exists(temp_file_path):
                 os.remove(temp_file_path)
-        # --- End Temporary File Handling ---
+        # --- Selesai simpan file sementara ---
 
-        # Generate palette image from extracted colors
+        # Buat gambar palet dari warna yang didapat
         palette_img = generate_palette_image(colors)
         palette_base64 = image_to_base64(palette_img)
 
-        # Get hex codes for the extracted colors
-        # FIX: Changed from c.hex to converting c.rgb tuple to hex string
+        # Ambil kode hex dari warna-warna yang diekstrak
         hex_colors = [f'#{c.rgb[0]:02x}{c.rgb[1]:02x}{c.rgb[2]:02x}' for c in colors]
 
         return render_template_string(
@@ -257,14 +253,13 @@ def upload():
             hex_colors=hex_colors
         )
     except Exception as e:
-        # Catch any other exceptions during processing and display an error message
-        # Ensure uploaded_base64 is passed even on error
+        # Jika ada error saat proses, tampilkan pesan error
         return render_template_string(
             HTML_TEMPLATE,
             uploaded_img=uploaded_base64,
-            error=f"An error occurred during color extraction: {e}"
+            error=f"Terjadi error saat ekstraksi warna: {e}"
         )
 
 if __name__ == '__main__':
-    # Run the Flask app in debug mode (for development)
+    # Jalankan Flask dalam mode debug
     app.run(debug=True)
