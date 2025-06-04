@@ -1,5 +1,5 @@
 from flask import Flask, request, render_template_string, send_file
-from Pylette import extract_colors
+from Pylette import extract_colors, Palette
 from PIL import Image, ImageDraw
 import io
 import base64
@@ -170,6 +170,43 @@ HTML_TEMPLATE = """
                          alt="Uploaded image">
                 </div>
             </div>
+            
+            <div class="glass-effect rounded-2xl p-6 shadow-xl">
+                <h3 class="text-lg font-semibold text-white mb-4 text-center">Edit Color</h3>
+                <div class="flex justify-between">
+                    <input type="hidden" name="red_offset" id="hiddenRed">
+                    <input type="hidden" name="green_offset" id="hiddenGreen">
+                    <input type="hidden" name="blue_offset" id="hiddenBlue">
+                    <div>
+                        <p>
+                            Red
+                        </p>
+                        <input type="range" min="-255" max="255" value="0" class="slider" id="redSlider">
+                        <p>
+                            Value : <span id="redValue"></span>
+                        </p>
+                    </div>
+                    <div>
+                        <p>
+                            Green
+                        </p>
+                        <input type="range" min="-255" max="255" value="0" class="slider" id="greenSlider">
+                        <p>
+                            Value : <span id="greenValue"></span>
+                        </p>
+                    </div>
+                    <div>
+                        <p>
+                            Blue
+                        </p>
+                        <input type="range" min="-255" max="255" value="0" class="slider" id="blueSlider">
+                        <p>
+                            Value : <span id="blueValue"></span>
+                        </p>
+                    </div>
+                    
+                </div>
+            </div>
             {% endif %}
 
             {% if hex_colors %}
@@ -186,6 +223,7 @@ HTML_TEMPLATE = """
                             <div class="w-full h-20 rounded-lg mb-3 shadow-inner border border-black/20" 
                                  style="background-color: {{ hex }};"></div>
                             <p class="text-white font-mono text-sm font-medium text-center">{{ hex }}</p>
+                            <p class="text-white font-mono text-sm font-medium text-center">{{ percentage[loop.index0] }}</p>
                             <p class="text-venus/60 text-xs text-center mt-1">Click to copy</p>
                         </div>
                         
@@ -278,6 +316,30 @@ HTML_TEMPLATE = """
                 }
             }
         });
+        
+        var redSlider = document.getElementById("redSlider");
+        var greenSlider = document.getElementById("greenSlider");
+        var blueSlider = document.getElementById("blueSlider");
+        
+        var redOutput = document.getElementById("redValue");
+        redOutput.innerHTML = redSlider.value;
+        var greenOutput = document.getElementById("greenValue");
+        greenOutput.innerHTML = greenSlider.value;
+        var blueOutput = document.getElementById("blueValue");
+        blueOutput.innerHTML = blueSlider.value;
+
+        redSlider.oninput = function() {
+            redOutput.innerHTML = this.value;
+            document.getElementById("hiddenRed").value = this.value;
+        }
+        greenSlider.oninput = function() {
+            greenOutput.innerHTML = this.value;
+            document.getElementById("hiddenGreen").value = this.value;
+        }
+        blueSlider.oninput = function() {
+            blueOutput.innerHTML = this.value;
+            document.getElementById("hiddenBlue").value = this.value;
+        }
     </script>
 </body>
 </html>
@@ -309,6 +371,21 @@ def image_to_base64(img: Image.Image) -> str:
     img.save(buffer, format="PNG")
     base64_img = base64.b64encode(buffer.getvalue()).decode("utf-8")
     return base64_img
+
+def adjust_image_colors(img: Image.Image, red_offset: int, green_offset: int, blue_offset: int) -> Image.Image:
+    """
+    Mengubah warna gambar dengan menambahkan offset pada RGB setiap pixel.
+    """
+    pixels = img.load()
+    width, height = img.size
+    for y in range(height):
+        for x in range(width):
+            r, g, b = pixels[x, y]
+            r = min(255, max(0, r + red_offset))
+            g = min(255, max(0, g + green_offset))
+            b = min(255, max(0, b + blue_offset))
+            pixels[x, y] = (r, g, b)
+    return img
 
 @app.route('/', methods=['GET'])
 def index():
@@ -346,6 +423,8 @@ def upload():
         finally:
             if os.path.exists(temp_file_path):
                 os.remove(temp_file_path)
+        
+        frequencies = [f"{s.freq * 100:.2f}%" for s in colors]
 
         palette_img = generate_palette_image(colors)
         palette_base64 = image_to_base64(palette_img)
@@ -356,7 +435,8 @@ def upload():
             HTML_TEMPLATE,
             uploaded_img=uploaded_base64,
             palette_img=palette_base64,
-            hex_colors=hex_colors
+            hex_colors=hex_colors,
+            percentage=frequencies
         )
     except Exception as e:
         return render_template_string(
