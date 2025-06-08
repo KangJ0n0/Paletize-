@@ -1,4 +1,4 @@
-from flask import Flask, request, render_template_string, send_file
+from flask import Flask, request, render_template_string, send_file, session
 from Pylette import extract_colors, Palette
 from PIL import Image, ImageDraw
 import io
@@ -7,6 +7,7 @@ import os
 import tempfile
 
 app = Flask(__name__)
+app.secret_key = 'your_secret_key_here'
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -166,76 +167,43 @@ HTML_TEMPLATE = """
                 <h3 class="text-lg font-semibold text-white mb-4 text-center">Your Image</h3>
                 <div class="flex justify-center">
                     <img src="data:image/png;base64,{{ uploaded_img }}" 
-                         class="max-w-full h-auto max-h-80 rounded-xl shadow-lg"
-                         alt="Uploaded image">
+                        class="max-w-full h-auto max-h-80 rounded-xl shadow-lg"
+                        alt="Uploaded image">
                 </div>
             </div>
             
-            <div class="glass-effect rounded-2xl p-6 shadow-xl">
+            <!-- Edit Color Form -->
+            <form action="/adjust" method="POST" class="glass-effect rounded-2xl p-6 shadow-xl">
                 <h3 class="text-lg font-semibold text-white mb-4 text-center">Edit Color</h3>
-                <div class="flex justify-between">
-                    <input type="hidden" name="red_offset" id="hiddenRed">
-                    <input type="hidden" name="green_offset" id="hiddenGreen">
-                    <input type="hidden" name="blue_offset" id="hiddenBlue">
-                    <div>
-                        <p>
-                            Red
-                        </p>
-                        <input type="range" min="-255" max="255" value="0" class="slider" id="redSlider">
-                        <p>
-                            Value : <span id="redValue"></span>
-                        </p>
+                <div class="flex flex-col md:flex-row justify-between gap-4">
+                    <div class="flex-1">
+                        <p class="text-white mb-1">Red</p>
+                        <input type="range" min="-255" max="255" value="{{ red_offset|default(0) }}" 
+                            class="w-full" name="red_offset" id="redSlider">
+                        <p class="text-venus">Value: <span id="redValue">{{ red_offset|default(0) }}</span></p>
                     </div>
-                    <div>
-                        <p>
-                            Green
-                        </p>
-                        <input type="range" min="-255" max="255" value="0" class="slider" id="greenSlider">
-                        <p>
-                            Value : <span id="greenValue"></span>
-                        </p>
+                    <div class="flex-1">
+                        <p class="text-white mb-1">Green</p>
+                        <input type="range" min="-255" max="255" value="{{ green_offset|default(0) }}" 
+                            class="w-full" name="green_offset" id="greenSlider">
+                        <p class="text-venus">Value: <span id="greenValue">{{ green_offset|default(0) }}</span></p>
                     </div>
-                    <div>
-                        <p>
-                            Blue
-                        </p>
-                        <input type="range" min="-255" max="255" value="0" class="slider" id="blueSlider">
-                        <p>
-                            Value : <span id="blueValue"></span>
-                        </p>
+                    <div class="flex-1">
+                        <p class="text-white mb-1">Blue</p>
+                        <input type="range" min="-255" max="255" value="{{ blue_offset|default(0) }}" 
+                            class="w-full" name="blue_offset" id="blueSlider">
+                        <p class="text-venus">Value: <span id="blueValue">{{ blue_offset|default(0) }}</span></p>
                     </div>
-                    
                 </div>
-            </div>
-            {% endif %}
-
-            {% if hex_colors %}
-            <!-- Color Palette -->
-            <div class="glass-effect rounded-2xl p-6 shadow-xl">
-                <h3 class="text-lg font-semibold text-white mb-6 text-center">Extracted Colors</h3>
-                <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-                    {% for hex in hex_colors %}
-                    <div class="relative group cursor-pointer transform transition-all duration-300 hover:scale-105"
-                         x-data="{ copied: false }"
-                         @click="copyToClipboard('{{ hex }}'); copied = true; setTimeout(() => copied = false, 2000)">
-                        
-                        <div class="bg-white/10 backdrop-blur-sm rounded-xl p-4 border border-white/20 hover:border-white/40 transition-all duration-300">
-                            <div class="w-full h-20 rounded-lg mb-3 shadow-inner border border-black/20" 
-                                 style="background-color: {{ hex }};"></div>
-                            <p class="text-white font-mono text-sm font-medium text-center">{{ hex }}</p>
-                            <p class="text-white font-mono text-sm font-medium text-center">{{ percentage[loop.index0] }}</p>
-                            <p class="text-venus/60 text-xs text-center mt-1">Click to copy</p>
-                        </div>
-                        
-                        <!-- Copy Notification -->
-                        <div x-show="copied" x-transition 
-                             class="absolute inset-0 flex items-center justify-center bg-black/70 rounded-xl">
-                            <span class="text-white font-semibold text-sm">Copied!</span>
-                        </div>
-                    </div>
-                    {% endfor %}
+                <div class="mt-6 flex gap-3">
+                    <button type="submit" class="flex-1 bg-gradient-to-r from-planetary to-galaxy hover:from-galaxy hover:to-planetary text-white font-semibold py-3 px-6 rounded-xl transition-all duration-300 transform hover:scale-105 shadow-lg">
+                        Apply Adjustments
+                    </button>
+                    <button type="button" onclick="resetSliders()" class="flex-1 bg-gray-600 hover:bg-gray-700 text-white font-semibold py-3 px-6 rounded-xl transition-all duration-300 transform hover:scale-105 shadow-lg">
+                        Reset
+                    </button>
                 </div>
-            </div>
+            </form>
             {% endif %}
 
             {% if palette_img %}
@@ -317,38 +285,38 @@ HTML_TEMPLATE = """
             }
         });
         
+        function resetSliders() {
+            document.getElementById('redSlider').value = 0;
+            document.getElementById('greenSlider').value = 0;
+            document.getElementById('blueSlider').value = 0;
+            
+            document.getElementById('redValue').textContent = '0';
+            document.getElementById('greenValue').textContent = '0';
+            document.getElementById('blueValue').textContent = '0';
+        }
+        
+        // Initialize sliders
         var redSlider = document.getElementById("redSlider");
         var greenSlider = document.getElementById("greenSlider");
         var blueSlider = document.getElementById("blueSlider");
         
-        var redOutput = document.getElementById("redValue");
-        redOutput.innerHTML = redSlider.value;
-        var greenOutput = document.getElementById("greenValue");
-        greenOutput.innerHTML = greenSlider.value;
-        var blueOutput = document.getElementById("blueValue");
-        blueOutput.innerHTML = blueSlider.value;
-
         redSlider.oninput = function() {
-            redOutput.innerHTML = this.value;
-            document.getElementById("hiddenRed").value = this.value;
+            document.getElementById("redValue").textContent = this.value;
         }
         greenSlider.oninput = function() {
-            greenOutput.innerHTML = this.value;
-            document.getElementById("hiddenGreen").value = this.value;
+            document.getElementById("greenValue").textContent = this.value;
         }
         blueSlider.oninput = function() {
-            blueOutput.innerHTML = this.value;
-            document.getElementById("hiddenBlue").value = this.value;
+            document.getElementById("blueValue").textContent = this.value;
         }
     </script>
 </body>
 </html>
 """
 
+
 def generate_palette_image(colors, width=400, height=100):
-    """
-    Membuat gambar palet warna dari list warna.
-    """
+    """Generate a palette image from color list"""
     img = Image.new('RGB', (width, height))
     draw = ImageDraw.Draw(img)
     num_colors = len(colors)
@@ -364,18 +332,13 @@ def generate_palette_image(colors, width=400, height=100):
     return img
 
 def image_to_base64(img: Image.Image) -> str:
-    """
-    Mengubah gambar PIL menjadi string base64 untuk ditampilkan di HTML.
-    """
+    """Convert PIL image to base64 string"""
     buffer = io.BytesIO()
     img.save(buffer, format="PNG")
-    base64_img = base64.b64encode(buffer.getvalue()).decode("utf-8")
-    return base64_img
+    return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
 def adjust_image_colors(img: Image.Image, red_offset: int, green_offset: int, blue_offset: int) -> Image.Image:
-    """
-    Mengubah warna gambar dengan menambahkan offset pada RGB setiap pixel.
-    """
+    """Adjust image colors by adding offsets to RGB values"""
     pixels = img.load()
     width, height = img.size
     for y in range(height):
@@ -389,60 +352,92 @@ def adjust_image_colors(img: Image.Image, red_offset: int, green_offset: int, bl
 
 @app.route('/', methods=['GET'])
 def index():
-    """
-    Menampilkan halaman utama dengan form upload gambar.
-    """
+    """Render main page with upload form"""
     return render_template_string(HTML_TEMPLATE)
 
 @app.route('/upload', methods=['POST'])
 def upload():
-    """
-    Proses upload gambar, ekstrak warna, buat gambar palet,
-    dan tampilkan hasilnya.
-    """
-    uploaded_base64 = None
-
+    """Handle image upload and initial processing"""
     if 'image' not in request.files:
-        return render_template_string(HTML_TEMPLATE, error="Tidak ada file gambar yang diupload.")
+        return render_template_string(HTML_TEMPLATE, error="No image file uploaded")
 
     image_file = request.files['image']
     if image_file.filename == '':
-        return render_template_string(HTML_TEMPLATE, error="Tidak ada file yang dipilih.")
+        return render_template_string(HTML_TEMPLATE, error="No file selected")
 
     try:
+        # Save original image to session
         img = Image.open(image_file.stream).convert("RGB")
-        uploaded_base64 = image_to_base64(img)
-
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as temp_image_file:
-            img.save(temp_image_file.name, format='PNG')
-            temp_file_path = temp_image_file.name
-
-        colors = []
-        try:
-            colors = extract_colors(temp_file_path, palette_size=4)
-        finally:
-            if os.path.exists(temp_file_path):
-                os.remove(temp_file_path)
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as temp_file:
+            img.save(temp_file.name, format='PNG')
+            session['original_image_path'] = temp_file.name
         
-        frequencies = [f"{s.freq * 100:.2f}%" for s in colors]
-
-        palette_img = generate_palette_image(colors)
-        palette_base64 = image_to_base64(palette_img)
-
-        hex_colors = [f'#{c.rgb[0]:02x}{c.rgb[1]:02x}{c.rgb[2]:02x}' for c in colors]
-
+        # Process image
+        return process_image(img, red_offset=0, green_offset=0, blue_offset=0)
+    except Exception as e:
         return render_template_string(
             HTML_TEMPLATE,
-            uploaded_img=uploaded_base64,
-            palette_img=palette_base64,
+            error=f"Error processing image: {str(e)}"
+        )
+
+@app.route('/adjust', methods=['POST'])
+def adjust_colors():
+    """Handle color adjustment requests"""
+    try:
+        # Get offsets from form
+        red_offset = int(request.form.get('red_offset', 0))
+        green_offset = int(request.form.get('green_offset', 0))
+        blue_offset = int(request.form.get('blue_offset', 0))
+        
+        # Load original image from session
+        if 'original_image_path' not in session or not os.path.exists(session['original_image_path']):
+            return render_template_string(HTML_TEMPLATE, error="Original image not found")
+        
+        img = Image.open(session['original_image_path'])
+        
+        # Process image with adjustments
+        return process_image(img, red_offset, green_offset, blue_offset)
+    except Exception as e:
+        return render_template_string(
+            HTML_TEMPLATE,
+            error=f"Error adjusting colors: {str(e)}"
+        )
+
+def process_image(img: Image.Image, red_offset: int, green_offset: int, blue_offset: int):
+    """Common processing for both upload and adjustment"""
+    try:
+        # Apply color adjustments
+        if red_offset != 0 or green_offset != 0 or blue_offset != 0:
+            img = adjust_image_colors(img, red_offset, green_offset, blue_offset)
+        
+        # Save adjusted image to temp file for extraction
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as temp_file:
+            img.save(temp_file.name, format='PNG')
+            temp_path = temp_file.name
+        
+        # Extract colors
+        colors = extract_colors(temp_path, palette_size=4)
+        os.unlink(temp_path)  # Clean up temp file
+        
+        # Generate results
+        frequencies = [f"{s.freq * 100:.2f}%" for s in colors]
+        hex_colors = [f'#{c.rgb[0]:02x}{c.rgb[1]:02x}{c.rgb[2]:02x}' for c in colors]
+        palette_img = generate_palette_image(colors)
+        
+        return render_template_string(
+            HTML_TEMPLATE,
+            uploaded_img=image_to_base64(img),
+            palette_img=image_to_base64(palette_img),
             hex_colors=hex_colors,
-            percentage=frequencies
+            percentage=frequencies,
+            red_offset=red_offset,
+            green_offset=green_offset,
+            blue_offset=blue_offset
         )
     except Exception as e:
         return render_template_string(
             HTML_TEMPLATE,
-            uploaded_base64=uploaded_base64,
-            error=f"Terjadi error saat ekstraksi warna: {e}"
+            error=f"Error processing image: {str(e)}"
         )
 
 if __name__ == '__main__':
