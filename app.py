@@ -1,5 +1,5 @@
-from flask import Flask, request, render_template_string, send_file, session
-from Pylette import extract_colors, Palette
+from flask import Flask, request, render_template_string, session, redirect, url_for
+from Pylette import extract_colors
 from PIL import Image, ImageDraw
 import io
 import base64
@@ -9,7 +9,8 @@ import tempfile
 app = Flask(__name__)
 app.secret_key = 'your_secret_key_here'
 
-HTML_TEMPLATE = """
+# Template untuk halaman ekstraksi warna
+EXTRACT_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -17,274 +18,585 @@ HTML_TEMPLATE = """
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Color Palette Extractor</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/alpinejs/3.13.3/cdn.min.js" defer></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <script>
-        tailwind.config = {
-            theme: {
-                extend: {
-                    fontFamily: {
-                        'inter': ['Inter', 'sans-serif'],
-                    },
-                    colors: {
-                        'planetary': '#334EAC',
-                        'venus': '#AAD6ED',
-                        'meteor': '#F7F2EB',
-                        'universe': '#709603',
-                        'galaxy': '#0B1F5C',
-                        'milkyway': '#FFF9F0',
-                        'sky': '#00E3FF'
-                    },
-                    animation: {
-                        'spin-slow': 'spin 3s linear infinite',
-                        'pulse-gentle': 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite',
-                        'fade-in': 'fadeIn 0.5s ease-in-out',
-                        'slide-up': 'slideUp 0.5s ease-out',
-                    }
-                }
-            }
-        }
-    </script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
     <style>
-        @keyframes fadeIn {
-            from { opacity: 0; }
-            to { opacity: 1; }
+        body { 
+            font-family: 'Inter', sans-serif;
+            background-color: #f8fafc;
         }
-        
-        @keyframes slideUp {
-            from { 
-                opacity: 0;
-                transform: translateY(30px);
-            }
-            to { 
-                opacity: 1;
-                transform: translateY(0);
-            }
+        .preview-container {
+            display: none;
+            position: relative;
+            background-color: #f1f5f9;
+            border-radius: 0.5rem;
+            padding: 1rem;
+            margin-bottom: 1rem;
+            text-align: center; /* Center the content */
         }
-        
-        .loading-spinner {
-            border: 3px solid #f3f4f6;
-            border-top: 3px solid #334EAC;
-            border-radius: 50%;
-            width: 40px;
-            height: 40px;
-            animation: spin 1s linear infinite;
+        .preview-container img {
+            max-width: 100%;
+            max-height: 400px;
+            object-fit: contain;
+            border-radius: 0.375rem;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            margin: 0 auto; /* Center the image */
+            display: block; /* Remove inline spacing */
         }
-        
-        .glass-effect {
-            background: rgba(255, 255, 255, 0.1);
-            backdrop-filter: blur(10px);
-            border: 1px solid rgba(255, 255, 255, 0.2);
+        .remove-preview {
+            position: absolute;
+            top: 1rem;
+            right: 1rem;
+            background: rgba(255, 255, 255, 0.9);
+            border-
+            transition: all 0.2s;
+        }
+        .remove-preview:hover {
+            background: rgba(255, 255, 255, 1);
+            transform: scale(1.05);
+        }
+        .color-swatch {
+            transition: transform 0.2s;
+        }
+        .color-swatch:hover {
+            transform: scale(1.05);
+        }
+        .nav-link {
+            position: relative;
+            padding-bottom: 0.5rem;
+        }
+        .nav-link::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            width: 0;
+            height: 2px;
+            background-color: #2563eb;
+            transition: width 0.2s;
+        }
+        .nav-link:hover::after {
+            width: 100%;
+        }
+        .nav-link.active::after {
+            width: 100%;
+        }
+        .palette-container {
+            position: relative;
+        }
+        .color-strip {
+            width: 100%;
+            height: 200px;
+            display: flex;
+        }
+        .color-label {
+            text-align: center;
+            font-family: monospace;
+            padding: 8px 0;
+            font-size: 14px;
+            color: #333;
         }
     </style>
 </head>
+<body class="min-h-screen">
+    <!-- Navbar -->
+    <nav class="bg-white shadow-sm border-b sticky top-0 z-50">
+        <div class="max-w-6xl mx-auto px-4">
+            <div class="flex justify-between items-center h-16">
+                <h1 class="text-xl font-semibold text-blue-500">Paletize</h1>
+                <div class="flex space-x-8">
+                    <a href="/" class="nav-link text-gray-600 hover:text-gray-900 active">Extract Colors</a>
+                    <a href="/edit" class="nav-link text-gray-600 hover:text-gray-900">Edit Image</a>
+                </div>
+            </div>
+        </div>
+    </nav>
 
-<body class="min-h-screen bg-gradient-to-br from-planetary via-universe to-galaxy font-inter" x-data="colorExtractor()">
-    
-    <!-- Main Container -->
-    <div class="container mx-auto px-4 py-8 max-w-4xl">
-        
+    <div class="max-w-5xl mx-auto px-4 py-8">
         <!-- Header -->
         <div class="text-center mb-12">
-            <h1 class="text-4xl md:text-6xl font-bold text-white mb-4">
-                Color Palette Extractor
-            </h1>
-            <p class="text-lg text-venus/90 max-w-2xl mx-auto">
-                Upload an image and we'll extract its beautiful color palette for you
-            </p>
+            <h2 class="text-4xl font-bold text-gray-900 mb-3">Extract Color Palette</h2>
+            <p class="text-lg text-gray-600">Upload an image to extract its dominant colors and create beautiful palettes</p>
         </div>
 
-        <!-- Upload Section -->
-        <div class="mb-8">
-            <form action="/upload" method="POST" enctype="multipart/form-data" 
-                  class="glass-effect rounded-2xl p-8 shadow-xl"
-                  @submit="isLoading = true">
-                
-                <!-- File Upload Area -->
-                <div class="relative group mb-6">
-                    <input type="file" name="image" accept="image/*" required 
-                           id="file-upload"
-                           class="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
-                           @change="handleFileSelect($event)">
-                    
-                    <div class="border-2 border-dashed border-venus/30 rounded-xl p-8 text-center transition-all duration-300 hover:border-venus/50 hover:bg-white/5">
-                        <div class="mb-4">
-                            <svg class="w-12 h-12 mx-auto text-venus/70" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
-                            </svg>
-                        </div>
-                        <div x-show="!selectedFile">
-                            <h3 class="text-xl font-semibold text-white mb-2">Choose an image</h3>
-                            <p class="text-venus/80 text-sm">PNG, JPG, GIF up to 10MB</p>
-                        </div>
-                        <div x-show="selectedFile" class="text-white">
-                            <p class="font-medium" x-text="selectedFile"></p>
-                        </div>
+        <!-- Upload Form -->
+        <div class="bg-white rounded-xl shadow-sm border p-8 mb-8">
+            <form action="/upload" method="POST" enctype="multipart/form-data" id="uploadForm">
+                <div class="mb-6">
+                    <label class="block text-lg font-medium text-gray-700 mb-3">Choose Image</label>
+                    <div class="flex items-center justify-center w-full">
+                        <label class="flex flex-col items-center justify-center w-full h-32 border-2 border-gray-300 border-dashed rounded-lg cursor-pointer bg-gray-50 hover:bg-gray-100">
+                            <div class="flex flex-col items-center justify-center pt-5 pb-6">
+                                <svg class="w-10 h-10 mb-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+                                </svg>
+                                <p class="mb-2 text-sm text-gray-500"><span class="font-semibold">Click to upload</span> or drag and drop</p>
+                                <p class="text-xs text-gray-500">PNG, JPG or JPEG (MAX. 10MB)</p>
+                            </div>
+                            <input type="file" name="image" accept="image/*" required id="imageInput" class="hidden" />
+                        </label>
                     </div>
                 </div>
-
-                <!-- Submit Button -->
-                <button type="submit" 
-                        :disabled="isLoading"
-                        class="w-full bg-gradient-to-r from-planetary to-galaxy hover:from-galaxy hover:to-planetary disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold py-3 px-6 rounded-xl transition-all duration-300 transform hover:scale-105 active:scale-95 shadow-lg">
-                    <span x-show="!isLoading" class="flex items-center justify-center">
-                        <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 12l2 2 4-4"></path>
+                
+                <!-- Preview Container -->
+                <div id="previewContainer" class="preview-container">
+                    <img id="imagePreview" src="" alt="Preview">
+                    <button type="button" id="removePreview" class="remove-preview">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
                         </svg>
-                        Extract Colors
-                    </span>
-                    <span x-show="isLoading" class="flex items-center justify-center">
-                        <div class="loading-spinner mr-3"></div>
-                        Processing...
-                    </span>
+                    </button>
+                </div>
+
+                <button type="submit" 
+                        class="w-full bg-blue-600 text-white py-3 px-6 rounded-lg hover:bg-blue-700 transition-colors text-lg font-medium">
+                    Extract Colors
                 </button>
             </form>
         </div>
 
-        <!-- Loading State -->
-        <div x-show="isLoading" class="text-center py-12 animate-fade-in">
-            <div class="loading-spinner mx-auto mb-4"></div>
-            <h3 class="text-xl font-semibold text-white mb-2">Extracting Colors...</h3>
-            <p class="text-venus/80">Please wait while we analyze your image</p>
-            <div class="mt-6 text-sm text-venus/60">
-                <p>✨ Results will appear below when ready</p>
-            </div>
-        </div>
-
-        <!-- Results Section -->
-        {% if uploaded_img or palette_img or hex_colors or error %}
-        <div class="space-y-8 animate-slide-up">
-            
-            <!-- Results Header -->
-            <div class="text-center border-t border-venus/20 pt-8">
-                <h2 class="text-2xl font-bold text-white mb-2">Results</h2>
-                <p class="text-venus/80 text-sm">Your extracted color palette is ready!</p>
-            </div>
-
+        <!-- Results -->
+        {% if uploaded_img or hex_colors or error %}
+        <div class="space-y-8">
             {% if uploaded_img %}
             <!-- Uploaded Image -->
-            <div class="glass-effect rounded-2xl p-6 shadow-xl">
-                <h3 class="text-lg font-semibold text-white mb-4 text-center">Your Image</h3>
+            <div class="bg-white rounded-xl shadow-sm border p-8">
+                <h3 class="text-xl font-semibold text-gray-900 mb-6">Uploaded Image</h3>
                 <div class="flex justify-center">
                     <img src="data:image/png;base64,{{ uploaded_img }}" 
-                        class="max-w-full h-auto max-h-80 rounded-xl shadow-lg"
-                        alt="Uploaded image">
+                         class="max-w-full h-auto max-h-[500px] rounded-lg shadow-sm"
+                         alt="Uploaded image">
                 </div>
             </div>
-            
-            <!-- Edit Color Form -->
-            <form action="/adjust" method="POST" class="glass-effect rounded-2xl p-6 shadow-xl">
-                <h3 class="text-lg font-semibold text-white mb-4 text-center">Edit Color</h3>
-                <div class="flex flex-col md:flex-row justify-between gap-4">
-                    <div class="flex-1">
-                        <p class="text-white mb-1">Red</p>
-                        <input type="range" min="-255" max="255" value="{{ red_offset|default(0) }}" 
-                            class="w-full" name="red_offset" id="redSlider">
-                        <p class="text-venus">Value: <span id="redValue">{{ red_offset|default(0) }}</span></p>
+            {% endif %}
+
+            {% if hex_colors %}
+            <!-- Color Palette -->
+            <div class="bg-white rounded-xl shadow-sm border p-8">
+                <h3 class="text-xl font-semibold text-gray-900 mb-6">Extracted Colors</h3>
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-6">
+                    {% for hex in hex_colors %}
+                    <div class="text-center color-swatch">
+                        <div class="w-full h-32 rounded-xl mb-3 shadow-sm border" 
+                             style="background-color: {{ hex }};"></div>
+                        <p class="text-sm font-mono text-gray-700 mb-1">{{ hex }}</p>
+                        <p class="text-xs text-gray-500">{{ percentage[loop.index0] }}</p>
                     </div>
-                    <div class="flex-1">
-                        <p class="text-white mb-1">Green</p>
-                        <input type="range" min="-255" max="255" value="{{ green_offset|default(0) }}" 
-                            class="w-full" name="green_offset" id="greenSlider">
-                        <p class="text-venus">Value: <span id="greenValue">{{ green_offset|default(0) }}</span></p>
-                    </div>
-                    <div class="flex-1">
-                        <p class="text-white mb-1">Blue</p>
-                        <input type="range" min="-255" max="255" value="{{ blue_offset|default(0) }}" 
-                            class="w-full" name="blue_offset" id="blueSlider">
-                        <p class="text-venus">Value: <span id="blueValue">{{ blue_offset|default(0) }}</span></p>
-                    </div>
+                    {% endfor %}
                 </div>
-                <div class="mt-6 flex gap-3">
-                    <button type="submit" class="flex-1 bg-gradient-to-r from-planetary to-galaxy hover:from-galaxy hover:to-planetary text-white font-semibold py-3 px-6 rounded-xl transition-all duration-300 transform hover:scale-105 shadow-lg">
-                        Apply Adjustments
-                    </button>
-                    <button type="button" onclick="resetSliders()" class="flex-1 bg-gray-600 hover:bg-gray-700 text-white font-semibold py-3 px-6 rounded-xl transition-all duration-300 transform hover:scale-105 shadow-lg">
-                        Reset
-                    </button>
+                
+                <!-- Continue to Edit Button -->
+                <div class="mt-8 text-center">
+                    <a href="/edit" class="inline-block bg-green-600 text-white py-3 px-8 rounded-lg hover:bg-green-700 transition-colors text-lg font-medium">
+                        Edit This Image
+                    </a>
                 </div>
-            </form>
+            </div>
             {% endif %}
 
             {% if palette_img %}
-            <!-- Download Section -->
-            <div class="glass-effect rounded-2xl p-6 shadow-xl text-center">
-                <h3 class="text-lg font-semibold text-white mb-4">Download Palette</h3>
-                <div class="mb-6">
-                    <img src="data:image/png;base64,{{ palette_img }}" 
-                         class="max-w-full h-auto rounded-lg shadow-lg mx-auto"
-                         alt="Color palette">
+            <!-- Download Palette -->
+            <div class="bg-white rounded-xl shadow-sm border p-8 text-center">
+                <h3 class="text-xl font-semibold text-gray-900 mb-6">Color Palette</h3>
+                
+                <!-- Styled palette similar to the reference image -->
+                <div class="palette-container mb-6 max-w-3xl mx-auto rounded-lg overflow-hidden border shadow-sm">
+                    <div class="color-strip">
+                        {% for hex in hex_colors %}
+                        <div style="background-color: {{ hex }}; flex: 1;"></div>
+                        {% endfor %}
+                    </div>
+                    <div class="color-labels bg-gray-100" style="display: flex;">
+                        {% for hex in hex_colors %}
+                        <div class="color-label" style="flex: 1;">{{ hex }}</div>
+                        {% endfor %}
+                    </div>
                 </div>
-                <a href="data:image/png;base64,{{ palette_img }}" download="color-palette.png"
-                   class="inline-flex items-center px-6 py-3 bg-gradient-to-r from-universe to-planetary hover:from-planetary hover:to-universe text-white font-semibold rounded-xl transition-all duration-300 transform hover:scale-105 shadow-lg">
-                    <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
-                    </svg>
-                    Download PNG
-                </a>
+                
+                <div class="flex justify-center space-x-4">
+                    <a href="data:image/png;base64,{{ palette_img }}" download="color-palette.png"
+                       class="inline-block bg-blue-600 text-white py-3 px-6 rounded-lg hover:bg-blue-700 transition-colors text-lg font-medium">
+                        Download Palette
+                    </a>
+                    
+                    <!-- Generate HTML for styled palette download -->
+                    <button id="downloadHtmlBtn" 
+                            class="inline-block bg-gray-600 text-white py-3 px-6 rounded-lg hover:bg-gray-700 transition-colors text-lg font-medium">
+                        Download HTML Version
+                    </button>
+                </div>
             </div>
             {% endif %}
 
             {% if error %}
             <!-- Error Message -->
-            <div class="bg-red-500/20 border border-red-400/30 backdrop-blur-sm rounded-2xl p-6">
-                <div class="flex items-center">
-                    <svg class="w-6 h-6 text-red-400 mr-3 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                    </svg>
-                    <p class="text-red-200">{{ error }}</p>
-                </div>
+            <div class="bg-red-50 border border-red-200 rounded-xl p-6">
+                <p class="text-red-700 text-center">{{ error }}</p>
             </div>
             {% endif %}
-
-            <!-- Try Again Button -->
-            <div class="text-center pt-4">
-                <button @click="window.location.reload()" 
-                        class="text-venus/80 hover:text-white transition-colors duration-300 text-sm underline">
-                    Extract colors from another image
-                </button>
-            </div>
         </div>
         {% endif %}
     </div>
 
-    <!-- Footer -->
-    <footer class="text-center py-8 mt-16 border-t border-venus/10">
-       
-    </footer>
-
     <script>
-        function colorExtractor() {
-            return {
-                selectedFile: null,
-                isLoading: false,
-                
-                handleFileSelect(event) {
-                    const file = event.target.files[0];
-                    this.selectedFile = file ? file.name : null;
-                },
-                
-                copyToClipboard(text) {
-                    navigator.clipboard.writeText(text).then(() => {
-                        console.log('Color copied:', text);
-                    }).catch(err => {
-                        console.error('Copy failed:', err);
-                    });
+        // Image Preview Functionality
+        const imageInput = document.getElementById('imageInput');
+        const previewContainer = document.getElementById('previewContainer');
+        const imagePreview = document.getElementById('imagePreview');
+        const removePreview = document.getElementById('removePreview');
+        const uploadForm = document.getElementById('uploadForm');
+        const dropZone = document.querySelector('.border-dashed');
+
+        // Handle file selection
+        imageInput.addEventListener('change', function(e) {
+            handleFileSelect(e.target.files[0]);
+        });
+
+        // Handle drag and drop
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('border-blue-500');
+        });
+
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.classList.remove('border-blue-500');
+        });
+
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('border-blue-500');
+            handleFileSelect(e.dataTransfer.files[0]);
+        });
+
+        function handleFileSelect(file) {
+            if (file) {
+                if (file.size > 10 * 1024 * 1024) { // 10MB limit
+                    alert('File size exceeds 10MB limit');
+                    return;
                 }
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    imagePreview.src = e.target.result;
+                    previewContainer.style.display = 'block';
+                }
+                reader.readAsDataURL(file);
             }
         }
-        
-        // Hide loading state when page loads with results
-        document.addEventListener('DOMContentLoaded', function() {
-            // If there are results on page load, we're not loading
-            if (document.querySelector('[x-data="colorExtractor()"]')) {
-                const app = Alpine.$data(document.querySelector('[x-data="colorExtractor()"]'));
-                if (app) {
-                    app.isLoading = false;
-                }
+
+        removePreview.addEventListener('click', function() {
+            imageInput.value = '';
+            previewContainer.style.display = 'none';
+            imagePreview.src = '';
+        });
+
+        // Prevent form submission if no image is selected
+        uploadForm.addEventListener('submit', function(e) {
+            if (!imageInput.files.length) {
+                e.preventDefault();
+                alert('Please select an image first');
             }
         });
         
+        {% if hex_colors %}
+        // Download HTML palette functionality
+        const downloadHtmlBtn = document.getElementById('downloadHtmlBtn');
+        if (downloadHtmlBtn) {
+            downloadHtmlBtn.addEventListener('click', function() {
+                const colors = [{% for hex in hex_colors %}'{{ hex }}',{% endfor %}];
+                
+                const htmlContent = `
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <meta charset="UTF-8">
+                    <title>Color Palette</title>
+                    <style>
+                        body {
+                            margin: 0;
+                            padding: 20px;
+                            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+                        }
+                        .palette-container {
+                            width: 800px;
+                            margin: 0 auto;
+                            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+                            border-radius: 4px;
+                            overflow: hidden;
+                        }
+                        .color-strip {
+                            height: 200px;
+                            display: flex;
+                        }
+                        .color-block {
+                            flex: 1;
+                        }
+                        .color-labels {
+                            display: flex;
+                            background: #f8f8f8;
+                        }
+                        .color-label {
+                            flex: 1;
+                            text-align: center;
+                            padding: 12px 0;
+                            font-family: monospace;
+                            font-size: 14px;
+                            color: #333;
+                        }
+                    </style>
+                </head>
+                <body>
+                    <div class="palette-container">
+                        <div class="color-strip">
+                            ${colors.map(color => `<div class="color-block" style="background-color: ${color};"></div>`).join('')}
+                        </div>
+                        <div class="color-labels">
+                            ${colors.map(color => `<div class="color-label">${color}</div>`).join('')}
+                        </div>
+                    </div>
+                </body>
+                </html>
+                `;
+                
+                const blob = new Blob([htmlContent], {type: 'text/html'});
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'color-palette.html';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            });
+        }
+        {% endif %}
+    </script>
+</body>
+</html>
+"""
+
+# Template untuk halaman edit gambar
+EDIT_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Edit Image Colors</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <style>
+        body { 
+            font-family: 'Inter', sans-serif;
+            background-color: #f8fafc;
+        }
+        .nav-link {
+            position: relative;
+            padding-bottom: 0.5rem;
+        }
+        .nav-link::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            width: 0;
+            height: 2px;
+            background-color: #2563eb;
+            transition: width 0.2s;
+        }
+        .nav-link:hover::after {
+            width: 100%;
+        }
+        .nav-link.active::after {
+            width: 100%;
+        }
+        .color-swatch {
+            transition: transform 0.2s;
+        }
+        .color-swatch:hover {
+            transform: scale(1.05);
+        }
+        .slider-container {
+            position: relative;
+            padding: 1rem;
+            background-color: #f1f5f9;
+            border-radius: 0.5rem;
+            margin-bottom: 1rem;
+        }
+        .slider-container:hover {
+            background-color: #e2e8f0;
+        }
+        input[type="range"] {
+            -webkit-appearance: none;
+            width: 100%;
+            height: 6px;
+            background: #e2e8f0;
+            border-radius: 3px;
+            outline: none;
+        }
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 20px;
+            height: 20px;
+            background: #2563eb;
+            border-radius: 50%;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        input[type="range"]::-webkit-slider-thumb:hover {
+            transform: scale(1.1);
+        }
+    </style>
+</head>
+<body class="min-h-screen">
+    <!-- Navbar -->
+    <nav class="bg-white shadow-sm border-b sticky top-0 z-50">
+        <div class="max-w-6xl mx-auto px-4">
+            <div class="flex justify-between items-center h-16">
+                <h1 class="text-xl font-semibold text-blue-500">Paletize</h1>
+                <div class="flex space-x-8">
+                    <a href="/" class="nav-link text-gray-600 hover:text-gray-900">Extract Colors</a>
+                    <a href="/edit" class="nav-link text-gray-600 hover:text-gray-900 active">Edit Image</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="max-w-5xl mx-auto px-4 py-8">
+        <!-- Header -->
+        <div class="text-center mb-12">
+            <h2 class="text-4xl font-bold text-gray-900 mb-3">Edit Image Colors</h2>
+            <p class="text-lg text-gray-600">Adjust RGB values to modify your image colors</p>
+        </div>
+
+        {% if not session.get('original_image_path') %}
+        <!-- No Image Message -->
+        <div class="bg-yellow-50 border border-yellow-200 rounded-xl p-8 text-center">
+            <h3 class="text-xl font-semibold text-yellow-800 mb-3">No Image Found</h3>
+            <p class="text-yellow-700 mb-6">Please upload an image first to edit its colors.</p>
+            <a href="/" class="inline-block bg-blue-600 text-white py-3 px-8 rounded-lg hover:bg-blue-700 transition-colors text-lg font-medium">
+                Go to Extract Colors
+            </a>
+        </div>
+        {% else %}
+        
+        <!-- Image Preview Section -->
+        <div class="bg-white rounded-xl shadow-sm border p-8 mb-8">
+            <h3 class="text-xl font-semibold text-gray-900 mb-6 text-center">Image Preview</h3>
+            <div class="flex flex-col items-center space-y-8">
+                <!-- Original Image -->
+                <div class="w-full max-w-2xl">
+                    <h4 class="text-lg font-medium text-gray-700 mb-3 text-center">Original Image</h4>
+                    <div class="flex justify-center">
+                        <img src="data:image/png;base64,{{ original_img|default('') }}" 
+                             class="max-w-full h-auto max-h-[400px] rounded-lg shadow-sm"
+                             alt="Original image">
+                    </div>
+                </div>
+
+                {% if edited_img %}
+                <!-- Edited Image -->
+                <div class="w-full max-w-2xl">
+                    <h4 class="text-lg font-medium text-gray-700 mb-3 text-center">Edited Image</h4>
+                    <div class="flex justify-center">
+                        <img src="data:image/png;base64,{{ edited_img }}" 
+                             class="max-w-full h-auto max-h-[400px] rounded-lg shadow-sm"
+                             alt="Edited image">
+                    </div>
+                    <!-- Download Button -->
+                    <div class="mt-4 text-center">
+                        <a href="data:image/png;base64,{{ edited_img }}" 
+                           download="edited-image.png"
+                           class="inline-block bg-green-600 text-white py-2 px-6 rounded-lg hover:bg-green-700 transition-colors">
+                            Download Edited Image
+                        </a>
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Color Adjustment Form -->
+        <div class="bg-white rounded-xl shadow-sm border p-8 mb-8">
+            <h3 class="text-xl font-semibold text-gray-900 mb-6">Adjust Colors</h3>
+            <form action="/adjust" method="POST">
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <!-- Red -->
+                    <div class="slider-container">
+                        <label class="block text-sm font-medium text-gray-700 mb-3">Red</label>
+                        <input type="range" min="-255" max="255" value="{{ red_offset|default(0) }}" 
+                               name="red_offset" id="redSlider" 
+                               class="mb-2">
+                        <div class="text-center">
+                            <span class="text-sm text-gray-600">Value: </span>
+                            <span id="redValue" class="font-medium">{{ red_offset|default(0) }}</span>
+                        </div>
+                    </div>
+                    
+                    <!-- Green -->
+                    <div class="slider-container">
+                        <label class="block text-sm font-medium text-gray-700 mb-3">Green</label>
+                        <input type="range" min="-255" max="255" value="{{ green_offset|default(0) }}" 
+                               name="green_offset" id="greenSlider"
+                               class="mb-2">
+                        <div class="text-center">
+                            <span class="text-sm text-gray-600">Value: </span>
+                            <span id="greenValue" class="font-medium">{{ green_offset|default(0) }}</span>
+                        </div>
+                    </div>
+                    
+                    <!-- Blue -->
+                    <div class="slider-container">
+                        <label class="block text-sm font-medium text-gray-700 mb-3">Blue</label>
+                        <input type="range" min="-255" max="255" value="{{ blue_offset|default(0) }}" 
+                               name="blue_offset" id="blueSlider"
+                               class="mb-2">
+                        <div class="text-center">
+                            <span class="text-sm text-gray-600">Value: </span>
+                            <span id="blueValue" class="font-medium">{{ blue_offset|default(0) }}</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="flex gap-4 mt-8">
+                    <button type="submit" 
+                            class="flex-1 bg-blue-600 text-white py-3 px-6 rounded-lg hover:bg-blue-700 transition-colors text-lg font-medium">
+                        Apply Changes
+                    </button>
+                    <button type="button" onclick="resetSliders()" 
+                            class="flex-1 bg-gray-600 text-white py-3 px-6 rounded-lg hover:bg-gray-700 transition-colors text-lg font-medium">
+                        Reset
+                    </button>
+                </div>
+            </form>
+        </div>
+
+        {% if hex_colors %}
+        <!-- Updated Color Palette -->
+        <div class="bg-white rounded-xl shadow-sm border p-8">
+            <h3 class="text-xl font-semibold text-gray-900 mb-6">Updated Color Palette</h3>
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-6">
+                {% for hex in hex_colors %}
+                <div class="text-center color-swatch">
+                    <div class="w-full h-32 rounded-xl mb-3 shadow-sm border" 
+                         style="background-color: {{ hex }};"></div>
+                    <p class="text-sm font-mono text-gray-700 mb-1">{{ hex }}</p>
+                    <p class="text-xs text-gray-500">{{ percentage[loop.index0] }}</p>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
+        {% if error %}
+        <!-- Error Message -->
+        <div class="bg-red-50 border border-red-200 rounded-xl p-6 mt-8">
+            <p class="text-red-700 text-center">{{ error }}</p>
+        </div>
+        {% endif %}
+        
+        {% endif %}
+    </div>
+
+    <script>
         function resetSliders() {
             document.getElementById('redSlider').value = 0;
             document.getElementById('greenSlider').value = 0;
@@ -295,25 +607,20 @@ HTML_TEMPLATE = """
             document.getElementById('blueValue').textContent = '0';
         }
         
-        // Initialize sliders
-        var redSlider = document.getElementById("redSlider");
-        var greenSlider = document.getElementById("greenSlider");
-        var blueSlider = document.getElementById("blueSlider");
-        
-        redSlider.oninput = function() {
-            document.getElementById("redValue").textContent = this.value;
+        // Update slider values with smooth transitions
+        document.getElementById('redSlider').oninput = function() {
+            document.getElementById('redValue').textContent = this.value;
         }
-        greenSlider.oninput = function() {
-            document.getElementById("greenValue").textContent = this.value;
+        document.getElementById('greenSlider').oninput = function() {
+            document.getElementById('greenValue').textContent = this.value;
         }
-        blueSlider.oninput = function() {
-            document.getElementById("blueValue").textContent = this.value;
+        document.getElementById('blueSlider').oninput = function() {
+            document.getElementById('blueValue').textContent = this.value;
         }
     </script>
 </body>
 </html>
 """
-
 
 def generate_palette_image(colors, width=400, height=100):
     """Generate a palette image from color list"""
@@ -339,8 +646,9 @@ def image_to_base64(img: Image.Image) -> str:
 
 def adjust_image_colors(img: Image.Image, red_offset: int, green_offset: int, blue_offset: int) -> Image.Image:
     """Adjust image colors by adding offsets to RGB values"""
-    pixels = img.load()
-    width, height = img.size
+    img_copy = img.copy()
+    pixels = img_copy.load()
+    width, height = img_copy.size
     for y in range(height):
         for x in range(width):
             r, g, b = pixels[x, y]
@@ -348,22 +656,46 @@ def adjust_image_colors(img: Image.Image, red_offset: int, green_offset: int, bl
             g = min(255, max(0, g + green_offset))
             b = min(255, max(0, b + blue_offset))
             pixels[x, y] = (r, g, b)
-    return img
+    return img_copy
 
-@app.route('/', methods=['GET'])
+@app.route('/')
 def index():
-    """Render main page with upload form"""
-    return render_template_string(HTML_TEMPLATE)
+    """Halaman ekstraksi warna"""
+    return render_template_string(EXTRACT_TEMPLATE)
+
+@app.route('/edit')
+def edit():
+    """Halaman edit gambar"""
+    try:
+        if 'original_image_path' in session and os.path.exists(session['original_image_path']):
+            original_img = Image.open(session['original_image_path'])
+            # Check if there's an edited image in session
+            edited_img = None
+            if 'edited_image_path' in session and os.path.exists(session['edited_image_path']):
+                edited_img = Image.open(session['edited_image_path'])
+                edited_img = image_to_base64(edited_img)
+            
+            return render_template_string(
+                EDIT_TEMPLATE,
+                original_img=image_to_base64(original_img),
+                edited_img=edited_img
+            )
+    except Exception as e:
+        return render_template_string(
+            EDIT_TEMPLATE,
+            error=f"Error loading image: {str(e)}"
+        )
+    return render_template_string(EDIT_TEMPLATE)
 
 @app.route('/upload', methods=['POST'])
 def upload():
-    """Handle image upload and initial processing"""
+    """Handle image upload dan ekstraksi warna"""
     if 'image' not in request.files:
-        return render_template_string(HTML_TEMPLATE, error="No image file uploaded")
+        return render_template_string(EXTRACT_TEMPLATE, error="No image file uploaded")
 
     image_file = request.files['image']
     if image_file.filename == '':
-        return render_template_string(HTML_TEMPLATE, error="No file selected")
+        return render_template_string(EXTRACT_TEMPLATE, error="No file selected")
 
     try:
         # Save original image to session
@@ -372,11 +704,24 @@ def upload():
             img.save(temp_file.name, format='PNG')
             session['original_image_path'] = temp_file.name
         
-        # Process image
-        return process_image(img, red_offset=0, green_offset=0, blue_offset=0)
+        # Extract colors
+        colors = extract_colors(temp_file.name, palette_size=4)
+        frequencies = [f"{s.freq * 100:.2f}%" for s in colors]
+        hex_colors = [f'#{c.rgb[0]:02x}{c.rgb[1]:02x}{c.rgb[2]:02x}' for c in colors]
+        
+        # Generate palette image
+        palette_img = generate_palette_image(colors)
+        
+        return render_template_string(
+            EXTRACT_TEMPLATE,
+            uploaded_img=image_to_base64(img),
+            palette_img=image_to_base64(palette_img),
+            hex_colors=hex_colors,
+            percentage=frequencies
+        )
     except Exception as e:
         return render_template_string(
-            HTML_TEMPLATE,
+            EXTRACT_TEMPLATE,
             error=f"Error processing image: {str(e)}"
         )
 
@@ -391,43 +736,30 @@ def adjust_colors():
         
         # Load original image from session
         if 'original_image_path' not in session or not os.path.exists(session['original_image_path']):
-            return render_template_string(HTML_TEMPLATE, error="Original image not found")
+            return render_template_string(EDIT_TEMPLATE, error="Original image not found. Please upload an image first.")
         
-        img = Image.open(session['original_image_path'])
+        original_img = Image.open(session['original_image_path'])
         
-        # Process image with adjustments
-        return process_image(img, red_offset, green_offset, blue_offset)
-    except Exception as e:
-        return render_template_string(
-            HTML_TEMPLATE,
-            error=f"Error adjusting colors: {str(e)}"
-        )
-
-def process_image(img: Image.Image, red_offset: int, green_offset: int, blue_offset: int):
-    """Common processing for both upload and adjustment"""
-    try:
         # Apply color adjustments
-        if red_offset != 0 or green_offset != 0 or blue_offset != 0:
-            img = adjust_image_colors(img, red_offset, green_offset, blue_offset)
+        edited_img = adjust_image_colors(original_img, red_offset, green_offset, blue_offset)
         
-        # Save adjusted image to temp file for extraction
+        # Save adjusted image for color extraction and session
         with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as temp_file:
-            img.save(temp_file.name, format='PNG')
+            edited_img.save(temp_file.name, format='PNG')
+            session['edited_image_path'] = temp_file.name
             temp_path = temp_file.name
         
-        # Extract colors
+        # Extract colors from adjusted image
         colors = extract_colors(temp_path, palette_size=4)
         os.unlink(temp_path)  # Clean up temp file
         
-        # Generate results
         frequencies = [f"{s.freq * 100:.2f}%" for s in colors]
         hex_colors = [f'#{c.rgb[0]:02x}{c.rgb[1]:02x}{c.rgb[2]:02x}' for c in colors]
-        palette_img = generate_palette_image(colors)
         
         return render_template_string(
-            HTML_TEMPLATE,
-            uploaded_img=image_to_base64(img),
-            palette_img=image_to_base64(palette_img),
+            EDIT_TEMPLATE,
+            original_img=image_to_base64(original_img),
+            edited_img=image_to_base64(edited_img),
             hex_colors=hex_colors,
             percentage=frequencies,
             red_offset=red_offset,
@@ -436,8 +768,11 @@ def process_image(img: Image.Image, red_offset: int, green_offset: int, blue_off
         )
     except Exception as e:
         return render_template_string(
-            HTML_TEMPLATE,
-            error=f"Error processing image: {str(e)}"
+            EDIT_TEMPLATE,
+            error=f"Error adjusting colors: {str(e)}",
+            red_offset=request.form.get('red_offset', 0),
+            green_offset=request.form.get('green_offset', 0),
+            blue_offset=request.form.get('blue_offset', 0)
         )
 
 if __name__ == '__main__':
