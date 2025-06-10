@@ -1,6 +1,6 @@
 from flask import Flask, request, render_template_string, session, redirect, url_for
 from Pylette import extract_colors
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 import io
 import base64
 import os
@@ -18,10 +18,10 @@ EXTRACT_TEMPLATE = """
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Color Palette Extractor</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
         body { 
-            font-family: 'Inter', sans-serif;
+            font-family: 'Poppins', sans-serif;
             background-color: #f8fafc;
         }
         .preview-container {
@@ -95,9 +95,84 @@ EXTRACT_TEMPLATE = """
             font-size: 14px;
             color: #333;
         }
+        /* Loading Animation Styles */
+        .loading-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(255, 255, 255, 0.95);
+            z-index: 9999;
+            justify-content: center;
+            align-items: center;
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+        }
+        .loading-container {
+            text-align: center;
+            padding: 2rem;
+            background: white;
+            border-radius: 1rem;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            transform: translateY(-10%);
+            animation: slideUp 0.3s ease-out forwards;
+        }
+        .loading-spinner {
+            width: 60px;
+            height: 60px;
+            border: 5px solid #e5e7eb;
+            border-top: 5px solid #2563eb;
+            border-radius: 50%;
+            animation: spin 1s cubic-bezier(0.68, -0.55, 0.265, 1.55) infinite;
+            margin: 0 auto;
+        }
+        .loading-text {
+            margin-top: 1.25rem;
+            color: #1e40af;
+            font-weight: 600;
+            font-size: 1.125rem;
+            letter-spacing: 0.025em;
+        }
+        .loading-subtext {
+            margin-top: 0.5rem;
+            color: #6b7280;
+            font-size: 0.875rem;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        @keyframes slideUp {
+            from { 
+                opacity: 0;
+                transform: translateY(0);
+            }
+            to { 
+                opacity: 1;
+                transform: translateY(-10%);
+            }
+        }
+        .fade-in {
+            animation: fadeIn 0.3s ease-in;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
     </style>
 </head>
 <body class="min-h-screen">
+    <!-- Loading Overlay -->
+    <div id="loadingOverlay" class="loading-overlay">
+        <div class="loading-container">
+            <div class="loading-spinner"></div>
+            <div class="loading-text">Processing Image</div>
+            <div class="loading-subtext">Please wait while we process your image...</div>
+        </div>
+    </div>
+
     <!-- Navbar -->
     <nav class="bg-white shadow-sm border-b sticky top-0 z-50">
         <div class="max-w-6xl mx-auto px-4">
@@ -238,6 +313,43 @@ EXTRACT_TEMPLATE = """
     </div>
 
     <script>
+        // Loading Overlay Functions
+        function showLoading() {
+            const overlay = document.getElementById('loadingOverlay');
+            overlay.style.display = 'flex';
+            document.body.style.overflow = 'hidden';
+            // Add loading dots animation
+            let dots = 0;
+            const loadingText = overlay.querySelector('.loading-text');
+            const originalText = loadingText.textContent;
+            const dotInterval = setInterval(() => {
+                dots = (dots + 1) % 4;
+                loadingText.textContent = originalText + '.'.repeat(dots);
+            }, 500);
+            // Store interval ID for cleanup
+            overlay.dataset.dotInterval = dotInterval;
+        }
+
+        function hideLoading() {
+            const overlay = document.getElementById('loadingOverlay');
+            // Clear the dots animation
+            if (overlay.dataset.dotInterval) {
+                clearInterval(parseInt(overlay.dataset.dotInterval));
+            }
+            overlay.style.display = 'none';
+            document.body.style.overflow = 'auto';
+        }
+
+        // Modify form submissions to show loading
+        document.addEventListener('DOMContentLoaded', function() {
+            const forms = document.querySelectorAll('form');
+            forms.forEach(form => {
+                form.addEventListener('submit', function() {
+                    showLoading();
+                });
+            });
+        });
+
         // Image Preview Functionality
         const imageInput = document.getElementById('imageInput');
         const previewContainer = document.getElementById('previewContainer');
@@ -382,10 +494,10 @@ EDIT_TEMPLATE = """
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Edit Image Colors</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
         body { 
-            font-family: 'Inter', sans-serif;
+            font-family: 'Poppins', sans-serif;
             background-color: #f8fafc;
         }
         .nav-link {
@@ -416,37 +528,183 @@ EDIT_TEMPLATE = """
         }
         .slider-container {
             position: relative;
-            padding: 1rem;
-            background-color: #f1f5f9;
-            border-radius: 0.5rem;
+            padding: 1.5rem;
+            background-color: #f8fafc;
+            border-radius: 1rem;
             margin-bottom: 1rem;
+            transition: all 0.2s ease;
+            border: 1px solid #e2e8f0;
         }
         .slider-container:hover {
-            background-color: #e2e8f0;
+            background-color: #f1f5f9;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
         }
+        .slider-container.active {
+            background-color: #f1f5f9;
+            border-color: #2563eb;
+        }
+        .slider-label {
+            display: flex;
+            align-items: center;
+            margin-bottom: 1rem;
+            font-weight: 500;
+            color: #1e293b;
+        }
+        .color-indicator {
+            width: 24px;
+            height: 24px;
+            border-radius: 6px;
+            margin-right: 0.75rem;
+            border: 2px solid #e2e8f0;
+        }
+        .red-indicator { background-color: #ef4444; }
+        .green-indicator { background-color: #22c55e; }
+        .blue-indicator { background-color: #3b82f6; }
+        
         input[type="range"] {
             -webkit-appearance: none;
             width: 100%;
-            height: 6px;
+            height: 8px;
             background: #e2e8f0;
-            border-radius: 3px;
+            border-radius: 4px;
             outline: none;
+            margin: 1rem 0;
         }
         input[type="range"]::-webkit-slider-thumb {
             -webkit-appearance: none;
-            width: 20px;
-            height: 20px;
-            background: #2563eb;
+            width: 24px;
+            height: 24px;
+            background: white;
             border-radius: 50%;
             cursor: pointer;
             transition: all 0.2s;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            border: 2px solid #2563eb;
         }
         input[type="range"]::-webkit-slider-thumb:hover {
             transform: scale(1.1);
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        .value-display {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: white;
+            padding: 0.5rem 1rem;
+            border-radius: 0.5rem;
+            border: 1px solid #e2e8f0;
+            margin-top: 0.5rem;
+        }
+        .value-number {
+            font-family: 'Poppins', monospace;
+            font-weight: 600;
+            color: #1e293b;
+            min-width: 3rem;
+            text-align: right;
+        }
+        .value-label {
+            color: #64748b;
+            font-size: 0.875rem;
+        }
+        .reset-button {
+            position: relative;
+            overflow: hidden;
+        }
+        .reset-button::after {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 0;
+            height: 0;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            transition: width 0.3s, height 0.3s;
+        }
+        .reset-button:active::after {
+            width: 200%;
+            height: 200%;
+        }
+        /* Loading Animation Styles */
+        .loading-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(255, 255, 255, 0.95);
+            z-index: 9999;
+            justify-content: center;
+            align-items: center;
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+        }
+        .loading-container {
+            text-align: center;
+            padding: 2rem;
+            background: white;
+            border-radius: 1rem;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            transform: translateY(-10%);
+            animation: slideUp 0.3s ease-out forwards;
+        }
+        .loading-spinner {
+            width: 60px;
+            height: 60px;
+            border: 5px solid #e5e7eb;
+            border-top: 5px solid #2563eb;
+            border-radius: 50%;
+            animation: spin 1s cubic-bezier(0.68, -0.55, 0.265, 1.55) infinite;
+            margin: 0 auto;
+        }
+        .loading-text {
+            margin-top: 1.25rem;
+            color: #1e40af;
+            font-weight: 600;
+            font-size: 1.125rem;
+            letter-spacing: 0.025em;
+        }
+        .loading-subtext {
+            margin-top: 0.5rem;
+            color: #6b7280;
+            font-size: 0.875rem;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        @keyframes slideUp {
+            from { 
+                opacity: 0;
+                transform: translateY(0);
+            }
+            to { 
+                opacity: 1;
+                transform: translateY(-10%);
+            }
+        }
+        .fade-in {
+            animation: fadeIn 0.3s ease-in;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
         }
     </style>
 </head>
 <body class="min-h-screen">
+    <!-- Loading Overlay -->
+    <div id="loadingOverlay" class="loading-overlay">
+        <div class="loading-container">
+            <div class="loading-spinner"></div>
+            <div class="loading-text">Processing Image</div>
+            <div class="loading-subtext">Please wait while we process your image...</div>
+        </div>
+    </div>
+
     <!-- Navbar -->
     <nav class="bg-white shadow-sm border-b sticky top-0 z-50">
         <div class="max-w-6xl mx-auto px-4">
@@ -468,19 +726,116 @@ EDIT_TEMPLATE = """
         </div>
 
         {% if not session.get('original_image_path') %}
-        <!-- No Image Message -->
-        <div class="bg-yellow-50 border border-yellow-200 rounded-xl p-8 text-center">
-            <h3 class="text-xl font-semibold text-yellow-800 mb-3">No Image Found</h3>
-            <p class="text-yellow-700 mb-6">Please upload an image first to edit its colors.</p>
-            <a href="/" class="inline-block bg-blue-600 text-white py-3 px-8 rounded-lg hover:bg-blue-700 transition-colors text-lg font-medium">
-                Go to Extract Colors
-            </a>
+        <!-- Upload Form -->
+        <div class="bg-white rounded-xl shadow-sm border p-8">
+            <form action="/upload_edit" method="POST" enctype="multipart/form-data" id="uploadForm">
+                <div class="mb-6">
+                    <label class="block text-lg font-medium text-gray-700 mb-3">Choose Image to Edit</label>
+                    <div class="flex items-center justify-center w-full">
+                        <label class="flex flex-col items-center justify-center w-full h-32 border-2 border-gray-300 border-dashed rounded-lg cursor-pointer bg-gray-50 hover:bg-gray-100">
+                            <div class="flex flex-col items-center justify-center pt-5 pb-6">
+                                <svg class="w-10 h-10 mb-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+                                </svg>
+                                <p class="mb-2 text-sm text-gray-500"><span class="font-semibold">Click to upload</span> or drag and drop</p>
+                                <p class="text-xs text-gray-500">PNG, JPG or JPEG (MAX. 10MB)</p>
+                            </div>
+                            <input type="file" name="image" accept="image/*" required id="imageInput" class="hidden" />
+                        </label>
+                    </div>
+                </div>
+
+                <button type="submit" 
+                        class="w-full bg-blue-600 text-white py-3 px-6 rounded-lg hover:bg-blue-700 transition-colors text-lg font-medium">
+                    Upload and Edit Image
+                </button>
+            </form>
         </div>
+
+        <script>
+            // Loading Overlay Functions
+            function showLoading() {
+                const overlay = document.getElementById('loadingOverlay');
+                overlay.style.display = 'flex';
+                document.body.style.overflow = 'hidden';
+            }
+
+            function hideLoading() {
+                const overlay = document.getElementById('loadingOverlay');
+                overlay.style.display = 'none';
+                document.body.style.overflow = 'auto';
+            }
+
+            // Modify form submissions to show loading
+            document.addEventListener('DOMContentLoaded', function() {
+                const forms = document.querySelectorAll('form');
+                forms.forEach(form => {
+                    form.addEventListener('submit', function() {
+                        showLoading();
+                    });
+                });
+            });
+
+            // Image Preview Functionality
+            const imageInput = document.getElementById('imageInput');
+            const uploadForm = document.getElementById('uploadForm');
+            const dropZone = document.querySelector('.border-dashed');
+
+            // Handle file selection
+            imageInput.addEventListener('change', function(e) {
+                if (e.target.files[0]) {
+                    if (e.target.files[0].size > 10 * 1024 * 1024) { // 10MB limit
+                        alert('File size exceeds 10MB limit');
+                        e.target.value = '';
+                    }
+                }
+            });
+
+            // Handle drag and drop
+            dropZone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                dropZone.classList.add('border-blue-500');
+            });
+
+            dropZone.addEventListener('dragleave', () => {
+                dropZone.classList.remove('border-blue-500');
+            });
+
+            dropZone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                dropZone.classList.remove('border-blue-500');
+                const file = e.dataTransfer.files[0];
+                if (file) {
+                    if (file.size > 10 * 1024 * 1024) { // 10MB limit
+                        alert('File size exceeds 10MB limit');
+                        return;
+                    }
+                    imageInput.files = e.dataTransfer.files;
+                }
+            });
+
+            // Prevent form submission if no image is selected
+            uploadForm.addEventListener('submit', function(e) {
+                if (!imageInput.files.length) {
+                    e.preventDefault();
+                    alert('Please select an image first');
+                }
+            });
+        </script>
         {% else %}
         
         <!-- Image Preview Section -->
         <div class="bg-white rounded-xl shadow-sm border p-8 mb-8">
-            <h3 class="text-xl font-semibold text-gray-900 mb-6 text-center">Image Preview</h3>
+            <div class="flex justify-between items-center mb-6">
+                <h3 class="text-xl font-semibold text-gray-900">Image Preview</h3>
+                <div>
+                    <input type="file" name="image" accept="image/*" required id="changeImageInput" class="hidden" />
+                    <button type="button" onclick="document.getElementById('changeImageInput').click()" 
+                            class="bg-gray-600 text-white py-2 px-4 rounded-lg hover:bg-gray-700 transition-colors text-sm font-medium">
+                        Change Image
+                    </button>
+                </div>
+            </div>
             <div class="flex flex-col items-center space-y-8">
                 <!-- Original Image -->
                 <div class="w-full max-w-2xl">
@@ -516,54 +871,71 @@ EDIT_TEMPLATE = """
 
         <!-- Color Adjustment Form -->
         <div class="bg-white rounded-xl shadow-sm border p-8 mb-8">
-            <h3 class="text-xl font-semibold text-gray-900 mb-6">Adjust Colors</h3>
-            <form action="/adjust" method="POST">
+            <div class="flex justify-between items-center mb-6">
+                <h3 class="text-xl font-semibold text-gray-900">Adjust Colors</h3>
+                <button type="button" onclick="resetSliders()" 
+                        class="reset-button bg-gray-100 text-gray-600 py-2 px-4 rounded-lg hover:bg-gray-200 transition-colors text-sm font-medium flex items-center">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                    Reset All
+                </button>
+            </div>
+            <form action="/adjust" method="POST" id="adjustForm">
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
                     <!-- Red -->
-                    <div class="slider-container">
-                        <label class="block text-sm font-medium text-gray-700 mb-3">Red</label>
+                    <div class="slider-container" id="redContainer">
+                        <div class="slider-label">
+                            <div class="color-indicator red-indicator"></div>
+                            Red Channel
+                        </div>
                         <input type="range" min="-255" max="255" value="{{ red_offset|default(0) }}" 
                                name="red_offset" id="redSlider" 
-                               class="mb-2">
-                        <div class="text-center">
-                            <span class="text-sm text-gray-600">Value: </span>
-                            <span id="redValue" class="font-medium">{{ red_offset|default(0) }}</span>
+                               class="red-slider">
+                        <div class="value-display">
+                            <span class="value-label">Value</span>
+                            <span id="redValue" class="value-number">{{ red_offset|default(0) }}</span>
                         </div>
                     </div>
                     
                     <!-- Green -->
-                    <div class="slider-container">
-                        <label class="block text-sm font-medium text-gray-700 mb-3">Green</label>
+                    <div class="slider-container" id="greenContainer">
+                        <div class="slider-label">
+                            <div class="color-indicator green-indicator"></div>
+                            Green Channel
+                        </div>
                         <input type="range" min="-255" max="255" value="{{ green_offset|default(0) }}" 
                                name="green_offset" id="greenSlider"
-                               class="mb-2">
-                        <div class="text-center">
-                            <span class="text-sm text-gray-600">Value: </span>
-                            <span id="greenValue" class="font-medium">{{ green_offset|default(0) }}</span>
+                               class="green-slider">
+                        <div class="value-display">
+                            <span class="value-label">Value</span>
+                            <span id="greenValue" class="value-number">{{ green_offset|default(0) }}</span>
                         </div>
                     </div>
                     
                     <!-- Blue -->
-                    <div class="slider-container">
-                        <label class="block text-sm font-medium text-gray-700 mb-3">Blue</label>
+                    <div class="slider-container" id="blueContainer">
+                        <div class="slider-label">
+                            <div class="color-indicator blue-indicator"></div>
+                            Blue Channel
+                        </div>
                         <input type="range" min="-255" max="255" value="{{ blue_offset|default(0) }}" 
                                name="blue_offset" id="blueSlider"
-                               class="mb-2">
-                        <div class="text-center">
-                            <span class="text-sm text-gray-600">Value: </span>
-                            <span id="blueValue" class="font-medium">{{ blue_offset|default(0) }}</span>
+                               class="blue-slider">
+                        <div class="value-display">
+                            <span class="value-label">Value</span>
+                            <span id="blueValue" class="value-number">{{ blue_offset|default(0) }}</span>
                         </div>
                     </div>
                 </div>
                 
-                <div class="flex gap-4 mt-8">
+                <div class="mt-8">
                     <button type="submit" 
-                            class="flex-1 bg-blue-600 text-white py-3 px-6 rounded-lg hover:bg-blue-700 transition-colors text-lg font-medium">
-                        Apply Changes
-                    </button>
-                    <button type="button" onclick="resetSliders()" 
-                            class="flex-1 bg-gray-600 text-white py-3 px-6 rounded-lg hover:bg-gray-700 transition-colors text-lg font-medium">
-                        Reset
+                            class="w-full bg-blue-600 text-white py-3 px-6 rounded-lg hover:bg-blue-700 transition-colors text-lg font-medium flex items-center justify-center">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                        </svg>
+                        Apply Color Changes
                     </button>
                 </div>
             </form>
@@ -597,45 +969,181 @@ EDIT_TEMPLATE = """
     </div>
 
     <script>
-        function resetSliders() {
-            document.getElementById('redSlider').value = 0;
-            document.getElementById('greenSlider').value = 0;
-            document.getElementById('blueSlider').value = 0;
+        // Loading Overlay Functions
+        function showLoading(message = 'Processing Image') {
+            const overlay = document.getElementById('loadingOverlay');
+            const loadingText = overlay.querySelector('.loading-text');
+            loadingText.textContent = message;
+            overlay.style.display = 'flex';
+            document.body.style.overflow = 'hidden';
             
-            document.getElementById('redValue').textContent = '0';
-            document.getElementById('greenValue').textContent = '0';
-            document.getElementById('blueValue').textContent = '0';
+            // Add loading dots animation
+            let dots = 0;
+            const originalText = loadingText.textContent;
+            const dotInterval = setInterval(() => {
+                dots = (dots + 1) % 4;
+                loadingText.textContent = originalText + '.'.repeat(dots);
+            }, 500);
+            // Store interval ID for cleanup
+            overlay.dataset.dotInterval = dotInterval;
+        }
+
+        function hideLoading() {
+            const overlay = document.getElementById('loadingOverlay');
+            // Clear the dots animation
+            if (overlay.dataset.dotInterval) {
+                clearInterval(parseInt(overlay.dataset.dotInterval));
+            }
+            overlay.style.display = 'none';
+            document.body.style.overflow = 'auto';
+        }
+
+        // Handle change image functionality
+        const changeImageInput = document.getElementById('changeImageInput');
+        if (changeImageInput) {
+            changeImageInput.addEventListener('change', function(e) {
+                if (e.target.files[0]) {
+                    if (e.target.files[0].size > 10 * 1024 * 1024) {
+                        alert('File size exceeds 10MB limit');
+                        e.target.value = '';
+                        return;
+                    }
+                    
+                    // Create and submit form
+                    const form = document.createElement('form');
+                    form.method = 'POST';
+                    form.action = '/upload_edit';
+                    form.enctype = 'multipart/form-data';
+                    
+                    const input = document.createElement('input');
+                    input.type = 'file';
+                    input.name = 'image';
+                    input.files = e.target.files;
+                    
+                    form.appendChild(input);
+                    document.body.appendChild(form);
+                    
+                    showLoading('Changing Image');
+                    form.submit();
+                }
+            });
+        }
+
+        // Handle color adjustment form
+        const adjustForm = document.getElementById('adjustForm');
+        if (adjustForm) {
+            adjustForm.addEventListener('submit', function(e) {
+                showLoading('Adjusting Colors');
+            });
+        }
+
+        function resetSliders() {
+            const sliders = ['red', 'green', 'blue'];
+            sliders.forEach(color => {
+                const slider = document.getElementById(`${color}Slider`);
+                const container = document.getElementById(`${color}Container`);
+                slider.value = 0;
+                container.classList.remove('active');
+                updateSliderContainer(slider);
+            });
         }
         
-        // Update slider values with smooth transitions
-        document.getElementById('redSlider').oninput = function() {
-            document.getElementById('redValue').textContent = this.value;
+        // Enhanced slider functionality
+        function updateSliderContainer(slider) {
+            const container = slider.closest('.slider-container');
+            const value = parseInt(slider.value);
+            
+            // Update active state
+            document.querySelectorAll('.slider-container').forEach(c => c.classList.remove('active'));
+            if (value !== 0) {
+                container.classList.add('active');
+            }
+            
+            // Update value display with color
+            const valueDisplay = container.querySelector('.value-number');
+            valueDisplay.textContent = value;
+            if (value > 0) {
+                valueDisplay.style.color = '#059669';
+            } else if (value < 0) {
+                valueDisplay.style.color = '#dc2626';
+            } else {
+                valueDisplay.style.color = '#1e293b';
+            }
         }
-        document.getElementById('greenSlider').oninput = function() {
-            document.getElementById('greenValue').textContent = this.value;
-        }
-        document.getElementById('blueSlider').oninput = function() {
-            document.getElementById('blueValue').textContent = this.value;
-        }
+
+        // Initialize sliders
+        document.addEventListener('DOMContentLoaded', function() {
+            const sliders = ['red', 'green', 'blue'];
+            sliders.forEach(color => {
+                const slider = document.getElementById(`${color}Slider`);
+                if (slider) {
+                    updateSliderContainer(slider);
+                    slider.addEventListener('input', function() {
+                        updateSliderContainer(this);
+                    });
+                }
+            });
+        });
     </script>
 </body>
 </html>
 """
 
-def generate_palette_image(colors, width=400, height=100):
-    """Generate a palette image from color list"""
-    img = Image.new('RGB', (width, height))
+def generate_palette_image(colors, width=800, height=300):
+    """Generate a styled palette image from color list"""
+    # Create image with white background
+    img = Image.new('RGB', (width, height), 'white')
     draw = ImageDraw.Draw(img)
+    
+    # Calculate dimensions
     num_colors = len(colors)
     if num_colors == 0:
         return img
+        
+    # Draw color strip
+    strip_height = 200
     swatch_width = width // num_colors
+    
+    # Draw color blocks
     for i, color in enumerate(colors):
         rgb_tuple = tuple(color.rgb)
+        # Draw main color block
         draw.rectangle(
-            [(i * swatch_width, 0), ((i + 1) * swatch_width, height)],
+            [(i * swatch_width, 0), ((i + 1) * swatch_width, strip_height)],
             fill=rgb_tuple
         )
+        
+        # Draw hex label background
+        label_y = strip_height
+        label_height = height - strip_height
+        draw.rectangle(
+            [(i * swatch_width, label_y), ((i + 1) * swatch_width, height)],
+            fill='#f8f8f8'
+        )
+        
+        # Add hex text
+        hex_color = f'#{color.rgb[0]:02x}{color.rgb[1]:02x}{color.rgb[2]:02x}'
+        try:
+            # Try to use a monospace font if available
+            font = ImageFont.truetype("arial.ttf", 20)
+        except:
+            # Fallback to default font
+            font = ImageFont.load_default()
+            
+        # Calculate text position to center it
+        text_bbox = draw.textbbox((0, 0), hex_color, font=font)
+        text_width = text_bbox[2] - text_bbox[0]
+        text_height = text_bbox[3] - text_bbox[1]
+        text_x = (i * swatch_width) + (swatch_width - text_width) // 2
+        text_y = label_y + (label_height - text_height) // 2
+        
+        # Draw text with shadow for better visibility
+        draw.text((text_x + 1, text_y + 1), hex_color, fill='#00000033', font=font)  # Shadow
+        draw.text((text_x, text_y), hex_color, fill='#333333', font=font)  # Main text
+    
+    # Add subtle border
+    draw.rectangle([(0, 0), (width-1, height-1)], outline='#e5e7eb')
+    
     return img
 
 def image_to_base64(img: Image.Image) -> str:
@@ -690,14 +1198,14 @@ def edit():
 @app.route('/upload', methods=['POST'])
 def upload():
     """Handle image upload dan ekstraksi warna"""
-    if 'image' not in request.files:
-        return render_template_string(EXTRACT_TEMPLATE, error="No image file uploaded")
-
-    image_file = request.files['image']
-    if image_file.filename == '':
-        return render_template_string(EXTRACT_TEMPLATE, error="No file selected")
-
     try:
+        if 'image' not in request.files:
+            return render_template_string(EXTRACT_TEMPLATE, error="No image file uploaded")
+
+        image_file = request.files['image']
+        if image_file.filename == '':
+            return render_template_string(EXTRACT_TEMPLATE, error="No file selected")
+
         # Save original image to session
         img = Image.open(image_file.stream).convert("RGB")
         with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as temp_file:
@@ -709,7 +1217,7 @@ def upload():
         frequencies = [f"{s.freq * 100:.2f}%" for s in colors]
         hex_colors = [f'#{c.rgb[0]:02x}{c.rgb[1]:02x}{c.rgb[2]:02x}' for c in colors]
         
-        # Generate palette image
+        # Generate palette image with new styling
         palette_img = generate_palette_image(colors)
         
         return render_template_string(
@@ -756,10 +1264,14 @@ def adjust_colors():
         frequencies = [f"{s.freq * 100:.2f}%" for s in colors]
         hex_colors = [f'#{c.rgb[0]:02x}{c.rgb[1]:02x}{c.rgb[2]:02x}' for c in colors]
         
+        # Generate palette image with new styling
+        palette_img = generate_palette_image(colors)
+        
         return render_template_string(
             EDIT_TEMPLATE,
             original_img=image_to_base64(original_img),
             edited_img=image_to_base64(edited_img),
+            palette_img=image_to_base64(palette_img),
             hex_colors=hex_colors,
             percentage=frequencies,
             red_offset=red_offset,
@@ -773,6 +1285,40 @@ def adjust_colors():
             red_offset=request.form.get('red_offset', 0),
             green_offset=request.form.get('green_offset', 0),
             blue_offset=request.form.get('blue_offset', 0)
+        )
+
+@app.route('/upload_edit', methods=['POST'])
+def upload_edit():
+    """Handle image upload for edit page"""
+    try:
+        if 'image' not in request.files:
+            return render_template_string(EDIT_TEMPLATE, error="No image file uploaded")
+
+        image_file = request.files['image']
+        if image_file.filename == '':
+            return render_template_string(EDIT_TEMPLATE, error="No file selected")
+
+        # Save original image to session
+        img = Image.open(image_file.stream).convert("RGB")
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as temp_file:
+            img.save(temp_file.name, format='PNG')
+            session['original_image_path'] = temp_file.name
+        
+        # Extract initial colors
+        colors = extract_colors(temp_file.name, palette_size=4)
+        frequencies = [f"{s.freq * 100:.2f}%" for s in colors]
+        hex_colors = [f'#{c.rgb[0]:02x}{c.rgb[1]:02x}{c.rgb[2]:02x}' for c in colors]
+        
+        return render_template_string(
+            EDIT_TEMPLATE,
+            original_img=image_to_base64(img),
+            hex_colors=hex_colors,
+            percentage=frequencies
+        )
+    except Exception as e:
+        return render_template_string(
+            EDIT_TEMPLATE,
+            error=f"Error processing image: {str(e)}"
         )
 
 if __name__ == '__main__':
