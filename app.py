@@ -446,27 +446,128 @@ EXTRACT_TEMPLATE = """
         const x2Input = document.getElementById('x2');
         const y2Input = document.getElementById('y2');
         let isDrawing = false;
-        let startX, startY, currentRect;
+        let startX_natural, startY_natural; // Coordinates in natural image pixels
+        let startX_display, startY_display; // Coordinates in displayed image pixels
+        let currentRect;
+        let scaleX = 1; // Scale factor for X coordinates
+        let scaleY = 1; // Scale factor for Y coordinates
+
+        imagePreview.onload = function() {
+            // Calculate scale factors once the image is loaded
+            if (imagePreview.naturalWidth > 0 && imagePreview.naturalHeight > 0) {
+                const renderedDims = getRenderedImageDimensions();
+                scaleX = imagePreview.naturalWidth / renderedDims.width;
+                scaleY = imagePreview.naturalHeight / renderedDims.height;
+            } else {
+                console.warn("Image natural dimensions not available on load, scaling might be inaccurate.");
+            }
+        };
 
         enableRegionSelection.addEventListener('change', function() {
             if (this.checked) {
-                imagePreview.style.cursor = 'crosshair';
+                if (!imagePreview.src) {
+                    alert("Please upload an image first to enable region selection.");
+                    this.checked = false;
+                    return;
+                }
+                // Ensure image natural dimensions are loaded before calculating scales
+                if (imagePreview.naturalWidth === 0 || imagePreview.naturalHeight === 0) {
+                    alert("Image is still loading. Please wait a moment and try again.");
+                    this.checked = false;
+                    return;
+                }
+
+                const renderedDims = getRenderedImageDimensions();
+                scaleX = imagePreview.naturalWidth / renderedDims.width;
+                scaleY = imagePreview.naturalHeight / renderedDims.height;
+
+                imagePreview.style.cursor = 'crosshair'; // Set crosshair when enabled
                 imagePreview.addEventListener('mousedown', startDrawing);
-                imagePreview.addEventListener('mousemove', drawRect);
+                // Use a single combined mousemove handler for drawing and cursor style
+                imagePreview.addEventListener('mousemove', handleCombinedMouseMove);
                 imagePreview.addEventListener('mouseup', stopDrawing);
             } else {
                 imagePreview.style.cursor = 'default';
                 imagePreview.removeEventListener('mousedown', startDrawing);
-                imagePreview.removeEventListener('mousemove', drawRect);
+                imagePreview.removeEventListener('mousemove', handleCombinedMouseMove); // Remove combined handler
                 imagePreview.removeEventListener('mouseup', stopDrawing);
                 resetRegionSelection();
             }
         });
 
+        function handleCombinedMouseMove(e) {
+            if (!enableRegionSelection.checked) return;
+            
+            if (isDrawing) {
+                drawRect(e); // If drawing, update the rectangle
+            } else {
+                // If not drawing, manage cursor style based on hover over rendered image
+                const mousePos = getMousePositionRelativeToRenderedImage(e);
+                const renderedDims = getRenderedImageDimensions();
+
+                if (mousePos.x_display >= 0 && mousePos.x_display <= renderedDims.width &&
+                    mousePos.y_display >= 0 && mousePos.y_display <= renderedDims.height) {
+                    imagePreview.style.cursor = 'crosshair';
+                } else {
+                    imagePreview.style.cursor = 'default';
+                }
+            }
+        }
+
+        function getRenderedImageDimensions() {
+            const img = imagePreview;
+            const aspectRatio = img.naturalWidth / img.naturalHeight;
+            let renderedWidth, renderedHeight, renderedX, renderedY;
+
+            if (img.clientWidth / img.clientHeight > aspectRatio) {
+                // Image is "pillarboxed" (constrained by height)
+                renderedHeight = img.clientHeight;
+                renderedWidth = img.clientHeight * aspectRatio;
+                renderedX = (img.clientWidth - renderedWidth) / 2;
+                renderedY = 0;
+            } else {
+                // Image is "letterboxed" (constrained by width) or fits perfectly
+                renderedWidth = img.clientWidth;
+                renderedHeight = img.clientWidth / aspectRatio;
+                renderedX = 0;
+                renderedY = (img.clientHeight - renderedHeight) / 2;
+            }
+            return { width: renderedWidth, height: renderedHeight, x: renderedX, y: renderedY };
+        }
+
+        function getMousePositionRelativeToRenderedImage(e) {
+            const imgRect = imagePreview.getBoundingClientRect();
+            const renderedDims = getRenderedImageDimensions();
+
+            // Mouse position relative to the <img> element's top-left
+            const mouseX_in_imgElement = e.clientX - imgRect.left;
+            const mouseY_in_imgElement = e.clientY - imgRect.top;
+
+            // Mouse position relative to the actual rendered image content
+            const x_display = mouseX_in_imgElement - renderedDims.x;
+            const y_display = mouseY_in_imgElement - renderedDims.y;
+
+            return { x_display: x_display, y_display: y_display };
+        }
+
         function startDrawing(e) {
+            e.preventDefault(); // Prevent default browser drag behavior
             isDrawing = true;
-            startX = e.offsetX;
-            startY = e.offsetY;
+            imagePreview.style.cursor = 'crosshair'; // Ensure crosshair during drag
+            const mousePos = getMousePositionRelativeToRenderedImage(e);
+            startX_display = mousePos.x_display;
+            startY_display = mousePos.y_display;
+
+            // Important: Ensure the click is within the actual image content
+            if (startX_display < 0 || startY_display < 0 ||
+                startX_display > getRenderedImageDimensions().width ||
+                startY_display > getRenderedImageDimensions().height) {
+                isDrawing = false; // Prevent drawing if click is on padding/letterbox
+                return;
+            }
+
+            startX_natural = Math.round(startX_display * scaleX);
+            startY_natural = Math.round(startY_display * scaleY);
 
             // Create the rectangle element if it doesn't exist
             if (!currentRect) {
@@ -476,41 +577,80 @@ EXTRACT_TEMPLATE = """
                 currentRect.style.background = 'rgba(37, 99, 235, 0.2)';
                 previewContainer.appendChild(currentRect);
             }
-            currentRect.style.left = `${startX}px`;
-            currentRect.style.top = `${startY}px`;
+
+            // Position the rectangle relative to the previewContainer, adjusted by image's offset within it
+            const imgRect = imagePreview.getBoundingClientRect();
+            const containerRect = previewContainer.getBoundingClientRect();
+            const renderedDims = getRenderedImageDimensions();
+
+            const imageOffsetX_in_container = imgRect.left - containerRect.left;
+            const imageOffsetY_in_container = imgRect.top - containerRect.top;
+
+            // Position based on the rendered image's top-left within the container
+            currentRect.style.left = `${Math.round(imageOffsetX_in_container + renderedDims.x + startX_display)}px`;
+            currentRect.style.top = `${Math.round(imageOffsetY_in_container + renderedDims.y + startY_display)}px`;
             currentRect.style.width = '0';
             currentRect.style.height = '0';
             currentRect.style.display = 'block';
         }
 
         function drawRect(e) {
-            if (!isDrawing) return;
+            const mousePos = getMousePositionRelativeToRenderedImage(e);
+            const currentX_display = mousePos.x_display;
+            const currentY_display = mousePos.y_display;
 
-            const currentX = e.offsetX;
-            const currentY = e.offsetY;
+            const currentX_natural = Math.round(currentX_display * scaleX);
+            const currentY_natural = Math.round(currentY_display * scaleY);
 
-            const width = currentX - startX;
-            const height = currentY - startY;
+            const rectLeft_display = Math.min(startX_display, currentX_display);
+            const rectTop_display = Math.min(startY_display, currentY_display);
+            const rectWidth_display = Math.abs(currentX_display - startX_display);
+            const rectHeight_display = Math.abs(currentY_display - startY_display);
 
-            currentRect.style.left = `${Math.min(startX, currentX)}px`;
-            currentRect.style.top = `${Math.min(startY, currentY)}px`;
-            currentRect.style.width = `${Math.abs(width)}px`;
-            currentRect.style.height = `${Math.abs(height)}px`;
+            const imgRect = imagePreview.getBoundingClientRect();
+            const containerRect = previewContainer.getBoundingClientRect();
+            const renderedDims = getRenderedImageDimensions();
 
-            // Update hidden inputs in real-time (optional, but good for visual feedback)
-            x1Input.value = Math.min(startX, currentX);
-            y1Input.value = Math.min(startY, currentY);
-            x2Input.value = Math.max(startX, currentX);
-            y2Input.value = Math.max(startY, currentY);
+            const imageOffsetX_in_container = imgRect.left - containerRect.left;
+            const imageOffsetY_in_container = imgRect.top - containerRect.top;
+
+            currentRect.style.left = `${Math.round(imageOffsetX_in_container + renderedDims.x + rectLeft_display)}px`;
+            currentRect.style.top = `${Math.round(imageOffsetY_in_container + renderedDims.y + rectTop_display)}px`;
+            currentRect.style.width = `${Math.round(rectWidth_display)}px`;
+            currentRect.style.height = `${Math.round(rectHeight_display)}px`;
+
+            x1Input.value = Math.min(startX_natural, currentX_natural);
+            y1Input.value = Math.min(startY_natural, currentY_natural);
+            x2Input.value = Math.max(startX_natural, currentX_natural);
+            y2Input.value = Math.max(startY_natural, currentY_natural);
         }
 
         function stopDrawing(e) {
+            if (!isDrawing) return;
             isDrawing = false;
-            // Final update of hidden inputs
-            x1Input.value = Math.min(startX, e.offsetX);
-            y1Input.value = Math.min(startY, e.offsetY);
-            x2Input.value = Math.max(startX, e.offsetX);
-            y2Input.value = Math.max(startY, e.offsetY);
+
+            // When drawing stops, if region selection is still enabled, revert to crosshair on hover
+            if (enableRegionSelection.checked) {
+                imagePreview.style.cursor = 'crosshair'; // Set to crosshair when drawing stops if still enabled
+            } else {
+                imagePreview.style.cursor = 'default';
+            }
+            
+            const mousePos = getMousePositionRelativeToRenderedImage(e);
+            const finalX_display = mousePos.x_display;
+            const finalY_display = mousePos.y_display;
+
+            const finalX_natural = Math.round(finalX_display * scaleX);
+            const finalY_natural = Math.round(finalY_display * scaleY);
+
+            x1Input.value = Math.min(startX_natural, finalX_natural);
+            y1Input.value = Math.min(startY_natural, finalY_natural);
+            x2Input.value = Math.max(startX_natural, finalX_natural);
+            y2Input.value = Math.max(startY_natural, finalY_natural);
+
+            if (parseInt(x1Input.value) === parseInt(x2Input.value) || parseInt(y1Input.value) === parseInt(y2Input.value)) {
+                resetRegionSelection();
+            }
         }
 
         function resetRegionSelection() {
@@ -524,7 +664,7 @@ EXTRACT_TEMPLATE = """
             enableRegionSelection.checked = false;
             imagePreview.style.cursor = 'default';
             imagePreview.removeEventListener('mousedown', startDrawing);
-            imagePreview.removeEventListener('mousemove', drawRect);
+            imagePreview.removeEventListener('mousemove', handleCombinedMouseMove); // Ensure to remove combined handler
             imagePreview.removeEventListener('mouseup', stopDrawing);
         }
 
