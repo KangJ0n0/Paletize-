@@ -5,6 +5,7 @@ import io
 import base64
 import os
 import tempfile
+from colorharmonies import Color, complementaryColor, triadicColor, splitComplementaryColor, tetradicColor, analogousColor, monochromaticColor
 
 app = Flask(__name__)
 app.secret_key = 'your_secret_key_here'
@@ -16,7 +17,7 @@ EXTRACT_TEMPLATE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Color Palette Extractor</title>
+    <title>Paletize</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
@@ -47,7 +48,15 @@ EXTRACT_TEMPLATE = """
             top: 1rem;
             right: 1rem;
             background: rgba(255, 255, 255, 0.9);
-            border-
+            border: none;
+            border-radius: 50%;
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
             transition: all 0.2s;
         }
         .remove-preview:hover {
@@ -212,6 +221,22 @@ EXTRACT_TEMPLATE = """
                     </div>
                 </div>
                 
+                <div class="mb-6">
+                    <label for="palette_size" class="block text-lg font-medium text-gray-700 mb-3">Number of Colors to Extract</label>
+                    <input type="number" id="palette_size" name="palette_size" value="{{ last_palette_size|default(4) }}" min="1" max="10" 
+                           class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm">
+                </div>
+                
+                <div class="mb-6 flex items-center">
+                    <input type="checkbox" id="enableRegionSelection" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                    <label for="enableRegionSelection" class="ml-2 block text-sm text-gray-900">Enable Region Selection</label>
+                </div>
+
+                <input type="hidden" id="x1" name="x1">
+                <input type="hidden" id="y1" name="y1">
+                <input type="hidden" id="x2" name="x2">
+                <input type="hidden" id="y2" name="y2">
+
                 <!-- Preview Container -->
                 <div id="previewContainer" class="preview-container">
                     <img id="imagePreview" src="" alt="Preview">
@@ -292,12 +317,6 @@ EXTRACT_TEMPLATE = """
                        class="inline-block bg-blue-600 text-white py-3 px-6 rounded-lg hover:bg-blue-700 transition-colors text-lg font-medium">
                         Download Palette
                     </a>
-                    
-                    <!-- Generate HTML for styled palette download -->
-                    <button id="downloadHtmlBtn" 
-                            class="inline-block bg-gray-600 text-white py-3 px-6 rounded-lg hover:bg-gray-700 transition-colors text-lg font-medium">
-                        Download HTML Version
-                    </button>
                 </div>
             </div>
             {% endif %}
@@ -306,6 +325,23 @@ EXTRACT_TEMPLATE = """
             <!-- Error Message -->
             <div class="bg-red-50 border border-red-200 rounded-xl p-6">
                 <p class="text-red-700 text-center">{{ error }}</p>
+            </div>
+            {% endif %}
+            
+            {% if color_harmonies %}
+            <!-- Color Harmonies -->
+            <div class="bg-white rounded-xl shadow-sm border p-8">
+                <h3 class="text-xl font-semibold text-gray-900 mb-6">Color Harmony Suggestions (based on most dominant color)</h3>
+                {% for harmony_type, colors in color_harmonies.items() %}
+                <div class="mb-6">
+                    <h4 class="text-lg font-medium text-gray-700 mb-3">{{ harmony_type }}</h4>
+                    <div class="flex flex-wrap gap-2">
+                        {% for color in colors %}
+                        <div class="w-16 h-16 rounded-md shadow-sm border" style="background-color: {{ color }};" title="{{ color }}"></div>
+                        {% endfor %}
+                    </div>
+                </div>
+                {% endfor %}
             </div>
             {% endif %}
         </div>
@@ -389,6 +425,8 @@ EXTRACT_TEMPLATE = """
                 reader.onload = function(e) {
                     imagePreview.src = e.target.result;
                     previewContainer.style.display = 'block';
+                    // Reset region selection when a new image is loaded
+                    resetRegionSelection();
                 }
                 reader.readAsDataURL(file);
             }
@@ -398,7 +436,97 @@ EXTRACT_TEMPLATE = """
             imageInput.value = '';
             previewContainer.style.display = 'none';
             imagePreview.src = '';
+            resetRegionSelection();
         });
+
+        // Region Selection Functionality
+        const enableRegionSelection = document.getElementById('enableRegionSelection');
+        const x1Input = document.getElementById('x1');
+        const y1Input = document.getElementById('y1');
+        const x2Input = document.getElementById('x2');
+        const y2Input = document.getElementById('y2');
+        let isDrawing = false;
+        let startX, startY, currentRect;
+
+        enableRegionSelection.addEventListener('change', function() {
+            if (this.checked) {
+                imagePreview.style.cursor = 'crosshair';
+                imagePreview.addEventListener('mousedown', startDrawing);
+                imagePreview.addEventListener('mousemove', drawRect);
+                imagePreview.addEventListener('mouseup', stopDrawing);
+            } else {
+                imagePreview.style.cursor = 'default';
+                imagePreview.removeEventListener('mousedown', startDrawing);
+                imagePreview.removeEventListener('mousemove', drawRect);
+                imagePreview.removeEventListener('mouseup', stopDrawing);
+                resetRegionSelection();
+            }
+        });
+
+        function startDrawing(e) {
+            isDrawing = true;
+            startX = e.offsetX;
+            startY = e.offsetY;
+
+            // Create the rectangle element if it doesn't exist
+            if (!currentRect) {
+                currentRect = document.createElement('div');
+                currentRect.style.border = '2px solid #2563eb';
+                currentRect.style.position = 'absolute';
+                currentRect.style.background = 'rgba(37, 99, 235, 0.2)';
+                previewContainer.appendChild(currentRect);
+            }
+            currentRect.style.left = `${startX}px`;
+            currentRect.style.top = `${startY}px`;
+            currentRect.style.width = '0';
+            currentRect.style.height = '0';
+            currentRect.style.display = 'block';
+        }
+
+        function drawRect(e) {
+            if (!isDrawing) return;
+
+            const currentX = e.offsetX;
+            const currentY = e.offsetY;
+
+            const width = currentX - startX;
+            const height = currentY - startY;
+
+            currentRect.style.left = `${Math.min(startX, currentX)}px`;
+            currentRect.style.top = `${Math.min(startY, currentY)}px`;
+            currentRect.style.width = `${Math.abs(width)}px`;
+            currentRect.style.height = `${Math.abs(height)}px`;
+
+            // Update hidden inputs in real-time (optional, but good for visual feedback)
+            x1Input.value = Math.min(startX, currentX);
+            y1Input.value = Math.min(startY, currentY);
+            x2Input.value = Math.max(startX, currentX);
+            y2Input.value = Math.max(startY, currentY);
+        }
+
+        function stopDrawing(e) {
+            isDrawing = false;
+            // Final update of hidden inputs
+            x1Input.value = Math.min(startX, e.offsetX);
+            y1Input.value = Math.min(startY, e.offsetY);
+            x2Input.value = Math.max(startX, e.offsetX);
+            y2Input.value = Math.max(startY, e.offsetY);
+        }
+
+        function resetRegionSelection() {
+            x1Input.value = '';
+            y1Input.value = '';
+            x2Input.value = '';
+            y2Input.value = '';
+            if (currentRect) {
+                currentRect.style.display = 'none';
+            }
+            enableRegionSelection.checked = false;
+            imagePreview.style.cursor = 'default';
+            imagePreview.removeEventListener('mousedown', startDrawing);
+            imagePreview.removeEventListener('mousemove', drawRect);
+            imagePreview.removeEventListener('mouseup', stopDrawing);
+        }
 
         // Prevent form submission if no image is selected
         uploadForm.addEventListener('submit', function(e) {
@@ -407,79 +535,6 @@ EXTRACT_TEMPLATE = """
                 alert('Please select an image first');
             }
         });
-        
-        {% if hex_colors %}
-        // Download HTML palette functionality
-        const downloadHtmlBtn = document.getElementById('downloadHtmlBtn');
-        if (downloadHtmlBtn) {
-            downloadHtmlBtn.addEventListener('click', function() {
-                const colors = [{% for hex in hex_colors %}'{{ hex }}',{% endfor %}];
-                
-                const htmlContent = `
-                <!DOCTYPE html>
-                <html>
-                <head>
-                    <meta charset="UTF-8">
-                    <title>Color Palette</title>
-                    <style>
-                        body {
-                            margin: 0;
-                            padding: 20px;
-                            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-                        }
-                        .palette-container {
-                            width: 800px;
-                            margin: 0 auto;
-                            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-                            border-radius: 4px;
-                            overflow: hidden;
-                        }
-                        .color-strip {
-                            height: 200px;
-                            display: flex;
-                        }
-                        .color-block {
-                            flex: 1;
-                        }
-                        .color-labels {
-                            display: flex;
-                            background: #f8f8f8;
-                        }
-                        .color-label {
-                            flex: 1;
-                            text-align: center;
-                            padding: 12px 0;
-                            font-family: monospace;
-                            font-size: 14px;
-                            color: #333;
-                        }
-                    </style>
-                </head>
-                <body>
-                    <div class="palette-container">
-                        <div class="color-strip">
-                            ${colors.map(color => `<div class="color-block" style="background-color: ${color};"></div>`).join('')}
-                        </div>
-                        <div class="color-labels">
-                            ${colors.map(color => `<div class="color-label">${color}</div>`).join('')}
-                        </div>
-                    </div>
-                </body>
-                </html>
-                `;
-                
-                const blob = new Blob([htmlContent], {type: 'text/html'});
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = 'color-palette.html';
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                URL.revokeObjectURL(url);
-            });
-        }
-        {% endif %}
     </script>
 </body>
 </html>
@@ -500,6 +555,50 @@ EDIT_TEMPLATE = """
             font-family: 'Poppins', sans-serif;
             background-color: #f8fafc;
         }
+        .preview-container {
+            display: none;
+            position: relative;
+            background-color: #f1f5f9;
+            border-radius: 0.5rem;
+            padding: 1rem;
+            margin-bottom: 1rem;
+            text-align: center;
+        }
+        .preview-container img {
+            max-width: 100%;
+            max-height: 400px;
+            object-fit: contain;
+            border-radius: 0.375rem;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            margin: 0 auto;
+            display: block;
+        }
+        .remove-preview {
+            position: absolute;
+            top: 1rem;
+            right: 1rem;
+            background: rgba(255, 255, 255, 0.9);
+            border: none;
+            border-radius: 50%;
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+            transition: all 0.2s;
+        }
+        .remove-preview:hover {
+            background: rgba(255, 255, 255, 1);
+            transform: scale(1.05);
+        }
+        .color-swatch {
+            transition: transform 0.2s;
+        }
+        .color-swatch:hover {
+            transform: scale(1.05);
+        }
         .nav-link {
             position: relative;
             padding-bottom: 0.5rem;
@@ -519,12 +618,6 @@ EDIT_TEMPLATE = """
         }
         .nav-link.active::after {
             width: 100%;
-        }
-        .color-swatch {
-            transition: transform 0.2s;
-        }
-        .color-swatch:hover {
-            transform: scale(1.05);
         }
         .slider-container {
             position: relative;
@@ -745,6 +838,16 @@ EDIT_TEMPLATE = """
                     </div>
                 </div>
 
+                <!-- Preview Container -->
+                <div id="previewContainer" class="preview-container">
+                    <img id="imagePreview" src="" alt="Preview">
+                    <button type="button" id="removePreview" class="remove-preview">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                    </button>
+                </div>
+
                 <button type="submit" 
                         class="w-full bg-blue-600 text-white py-3 px-6 rounded-lg hover:bg-blue-700 transition-colors text-lg font-medium">
                     Upload and Edit Image
@@ -778,17 +881,15 @@ EDIT_TEMPLATE = """
 
             // Image Preview Functionality
             const imageInput = document.getElementById('imageInput');
+            const previewContainer = document.getElementById('previewContainer');
+            const imagePreview = document.getElementById('imagePreview');
+            const removePreview = document.getElementById('removePreview');
             const uploadForm = document.getElementById('uploadForm');
             const dropZone = document.querySelector('.border-dashed');
 
             // Handle file selection
             imageInput.addEventListener('change', function(e) {
-                if (e.target.files[0]) {
-                    if (e.target.files[0].size > 10 * 1024 * 1024) { // 10MB limit
-                        alert('File size exceeds 10MB limit');
-                        e.target.value = '';
-                    }
-                }
+                handleFileSelect(e.target.files[0]);
             });
 
             // Handle drag and drop
@@ -804,14 +905,28 @@ EDIT_TEMPLATE = """
             dropZone.addEventListener('drop', (e) => {
                 e.preventDefault();
                 dropZone.classList.remove('border-blue-500');
-                const file = e.dataTransfer.files[0];
+                handleFileSelect(e.dataTransfer.files[0]);
+            });
+
+            function handleFileSelect(file) {
                 if (file) {
                     if (file.size > 10 * 1024 * 1024) { // 10MB limit
                         alert('File size exceeds 10MB limit');
                         return;
                     }
-                    imageInput.files = e.dataTransfer.files;
+                    const reader = new FileReader();
+                    reader.onload = function(e) {
+                        imagePreview.src = e.target.result;
+                        previewContainer.style.display = 'block';
+                    }
+                    reader.readAsDataURL(file);
                 }
+            }
+
+            removePreview.addEventListener('click', function() {
+                imageInput.value = '';
+                previewContainer.style.display = 'none';
+                imagePreview.src = '';
             });
 
             // Prevent form submission if no image is selected
@@ -857,12 +972,13 @@ EDIT_TEMPLATE = """
                              alt="Edited image">
                     </div>
                     <!-- Download Button -->
-                    <div class="mt-4 text-center">
+                    <div class="mt-4 text-center flex justify-center space-x-4">
                         <a href="data:image/png;base64,{{ edited_img }}" 
                            download="edited-image.png"
                            class="inline-block bg-green-600 text-white py-2 px-6 rounded-lg hover:bg-green-700 transition-colors">
                             Download Edited Image
                         </a>
+                        
                     </div>
                 </div>
                 {% endif %}
@@ -940,23 +1056,6 @@ EDIT_TEMPLATE = """
                 </div>
             </form>
         </div>
-
-        {% if hex_colors %}
-        <!-- Updated Color Palette -->
-        <div class="bg-white rounded-xl shadow-sm border p-8">
-            <h3 class="text-xl font-semibold text-gray-900 mb-6">Updated Color Palette</h3>
-            <div class="grid grid-cols-2 md:grid-cols-4 gap-6">
-                {% for hex in hex_colors %}
-                <div class="text-center color-swatch">
-                    <div class="w-full h-32 rounded-xl mb-3 shadow-sm border" 
-                         style="background-color: {{ hex }};"></div>
-                    <p class="text-sm font-mono text-gray-700 mb-1">{{ hex }}</p>
-                    <p class="text-xs text-gray-500">{{ percentage[loop.index0] }}</p>
-                </div>
-                {% endfor %}
-            </div>
-        </div>
-        {% endif %}
 
         {% if error %}
         <!-- Error Message -->
@@ -1152,6 +1251,11 @@ def image_to_base64(img: Image.Image) -> str:
     img.save(buffer, format="PNG")
     return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
+def base64_to_image(base64_string: str) -> Image.Image:
+    """Convert base64 string to PIL image"""
+    img_bytes = base64.b64decode(base64_string)
+    return Image.open(io.BytesIO(img_bytes))
+
 def adjust_image_colors(img: Image.Image, red_offset: int, green_offset: int, blue_offset: int) -> Image.Image:
     """Adjust image colors by adding offsets to RGB values"""
     img_copy = img.copy()
@@ -1166,10 +1270,94 @@ def adjust_image_colors(img: Image.Image, red_offset: int, green_offset: int, bl
             pixels[x, y] = (r, g, b)
     return img_copy
 
+def get_color_harmonies(rgb_color):
+    """Generates various color harmonies for a given RGB color."""
+    r, g, b = rgb_color
+    base_color = Color([r, g, b])
+    
+    harmonies = {
+        "Complementary": [],
+        "Triadic": [],
+        "Split Complementary": [],
+        "Tetradic": [],
+        "Analogous": [],
+        "Monochromatic": []
+    }
+
+    # Complementary
+    comp_rgb = complementaryColor(base_color)
+    harmonies["Complementary"].append(f'#{comp_rgb[0]:02x}{comp_rgb[1]:02x}{comp_rgb[2]:02x}')
+
+    # Triadic
+    triadic_rgbs = triadicColor(base_color)
+    for tri_rgb in triadic_rgbs:
+        harmonies["Triadic"].append(f'#{tri_rgb[0]:02x}{tri_rgb[1]:02x}{tri_rgb[2]:02x}')
+
+    # Split Complementary
+    split_comp_rgbs = splitComplementaryColor(base_color)
+    for sc_rgb in split_comp_rgbs:
+        harmonies["Split Complementary"].append(f'#{sc_rgb[0]:02x}{sc_rgb[1]:02x}{sc_rgb[2]:02x}')
+        
+    # Tetradic
+    tetradic_rgbs = tetradicColor(base_color)
+    for tet_rgb in tetradic_rgbs:
+        harmonies["Tetradic"].append(f'#{tet_rgb[0]:02x}{tet_rgb[1]:02x}{tet_rgb[2]:02x}')
+
+    # Analogous
+    analogous_rgbs = analogousColor(base_color)
+    for ana_rgb in analogous_rgbs:
+        harmonies["Analogous"].append(f'#{ana_rgb[0]:02x}{ana_rgb[1]:02x}{ana_rgb[2]:02x}')
+
+    # Monochromatic (Pylette already provides shades, but this will add variations from colorharmonies)
+    mono_rgbs = monochromaticColor(base_color)
+    for mono_rgb in mono_rgbs:
+        harmonies["Monochromatic"].append(f'#{mono_rgb[0]:02x}{mono_rgb[1]:02x}{mono_rgb[2]:02x}')
+
+    return harmonies
+
 @app.route('/')
 def index():
     """Halaman ekstraksi warna"""
-    return render_template_string(EXTRACT_TEMPLATE)
+    uploaded_img_b64 = None
+    palette_img_b64 = None
+    hex_colors = None
+    frequencies = None
+    error = None
+    color_harmonies = None # New variable for color harmonies
+    last_palette_size = session.get('last_palette_size', 4) # Default to 4
+
+    try:
+        current_img_path = session.get('current_active_image_path')
+        
+        if current_img_path and os.path.exists(current_img_path):
+            img = Image.open(current_img_path).convert("RGB")
+            uploaded_img_b64 = image_to_base64(img)
+
+            colors = extract_colors(current_img_path, palette_size=last_palette_size)
+            frequencies = [f"{s.freq * 100:.2f}%" for s in colors]
+            hex_colors = [f'#{c.rgb[0]:02x}{c.rgb[1]:02x}{c.rgb[2]:02x}' for c in colors]
+
+            palette_img = generate_palette_image(colors)
+            palette_img_b64 = image_to_base64(palette_img)
+
+            # Generate color harmonies from the first extracted color
+            if colors:
+                first_color_rgb = colors[0].rgb
+                color_harmonies = get_color_harmonies(first_color_rgb)
+
+    except Exception as e:
+        error = f"Error loading or processing image: {str(e)}"
+
+    return render_template_string(
+        EXTRACT_TEMPLATE,
+        uploaded_img=uploaded_img_b64,
+        palette_img=palette_img_b64,
+        hex_colors=hex_colors,
+        percentage=frequencies,
+        last_palette_size=last_palette_size,
+        color_harmonies=color_harmonies, # Pass color harmonies to template
+        error=error
+    )
 
 @app.route('/edit')
 def edit():
@@ -1206,14 +1394,58 @@ def upload():
         if image_file.filename == '':
             return render_template_string(EXTRACT_TEMPLATE, error="No file selected")
 
-        # Save original image to session
+        # Get palette size from form, default to 4 if not provided or invalid
+        try:
+            palette_size = int(request.form.get('palette_size', 4))
+            if not (1 <= palette_size <= 10):
+                raise ValueError("Palette size must be between 1 and 10.")
+        except ValueError as e:
+            return render_template_string(EXTRACT_TEMPLATE, error=f"Invalid palette size: {e}")
+
+        # Clear any existing paths from previous sessions/uploads for a clean slate
+        session.pop('current_active_image_path', None)
+        session.pop('original_image_path', None)
+        session.pop('edited_image_path', None)
+
+        # Save the uploaded image and store its path as the 'current_active_image_path'
         img = Image.open(image_file.stream).convert("RGB")
+        
+        # Get region selection coordinates
+        enable_region = request.form.get('enableRegionSelection') == 'on'
+        x1 = request.form.get('x1')
+        y1 = request.form.get('y1')
+        x2 = request.form.get('x2')
+        y2 = request.form.get('y2')
+
+        # If region selection is enabled, try to crop the image
+        if enable_region and x1 and y1 and x2 and y2:
+            try:
+                x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+                # Ensure coordinates are within image bounds and form a valid rectangle
+                img_width, img_height = img.size
+                left = max(0, min(x1, x2))
+                top = max(0, min(y1, y2))
+                right = min(img_width, max(x1, x2))
+                bottom = min(img_height, max(y1, y2))
+
+                if right > left and bottom > top: # Ensure a valid area is selected
+                    img = img.crop((left, top, right, bottom))
+                else:
+                    # If invalid region, proceed with full image but log a warning
+                    print("Warning: Invalid region selected, processing full image.")
+            except ValueError:
+                print("Warning: Invalid coordinates for region selection, processing full image.")
+
         with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as temp_file:
             img.save(temp_file.name, format='PNG')
-            session['original_image_path'] = temp_file.name
+            session['current_active_image_path'] = temp_file.name
+            current_img_path = temp_file.name
         
+        # Store the chosen palette size in session
+        session['last_palette_size'] = palette_size
+
         # Extract colors
-        colors = extract_colors(temp_file.name, palette_size=4)
+        colors = extract_colors(current_img_path, palette_size=palette_size)
         frequencies = [f"{s.freq * 100:.2f}%" for s in colors]
         hex_colors = [f'#{c.rgb[0]:02x}{c.rgb[1]:02x}{c.rgb[2]:02x}' for c in colors]
         
@@ -1272,8 +1504,6 @@ def adjust_colors():
             original_img=image_to_base64(original_img),
             edited_img=image_to_base64(edited_img),
             palette_img=image_to_base64(palette_img),
-            hex_colors=hex_colors,
-            percentage=frequencies,
             red_offset=red_offset,
             green_offset=green_offset,
             blue_offset=blue_offset
